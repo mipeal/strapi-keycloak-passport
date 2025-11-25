@@ -14,6 +14,17 @@
 
 ---
 
+## 📋 Requirements
+
+| Requirement | Version |
+|-------------|---------|
+| Node.js | `>=20.0.0` (including Node 22 and 24) |
+| npm | `>=9.0.0` |
+| Strapi | `v5.x` |
+| Keycloak | `18+` (recommended) or legacy versions |
+
+---
+
 ## 📦 Installation
 ```bash
 yarn add strapi-keycloak-passport
