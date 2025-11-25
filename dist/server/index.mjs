@@ -442,7 +442,6 @@ const adminUserService = ({ strapi: strapi2 }) => ({
       }
       return adminUser;
     } catch (error) {
-      console.log(error);
       strapi2.log.error("❌ Failed to create/update user:", error.message);
       throw new Error("Failed to create/update user.");
     }
