@@ -82,16 +82,38 @@ const authOverrideController = {
         }
       });
     } catch (error) {
+      const config2 = strapi.config.get("plugin::strapi-keycloak-passport");
+      const isDebugMode = config2?.debug === true;
+      const errorDetails = {
+        status: error.response?.status || error?.status || 400,
+        message: error.response?.data?.error_description || error.response?.data?.error || error?.message || "Invalid credentials",
+        name: error?.name ?? "ApplicationError",
+        endpoint: `${config2?.KEYCLOAK_AUTH_URL}${config2?.KEYCLOAK_TOKEN_URL}`,
+        responseData: error.response?.data || null
+      };
       strapi.log.error(
         `🔴 Authentication Failed for ${ctx.request.body?.email || "unknown user"}:`,
-        error.response?.data || error.message
+        isDebugMode ? errorDetails : error.response?.data || error.message
       );
+      if (isDebugMode) {
+        strapi.log.debug("🔍 Debug - Full error details:", {
+          errorMessage: error.message,
+          errorStack: error.stack,
+          responseStatus: error.response?.status,
+          responseData: error.response?.data,
+          requestUrl: error.config?.url
+        });
+      }
       return ctx.badRequest("Invalid credentials", {
         error: {
-          status: error?.status ?? 400,
-          name: error?.name ?? "ApplicationError",
-          message: error?.message ?? "Invalid credentials",
-          details: error?.details ?? {}
+          status: errorDetails.status,
+          name: errorDetails.name,
+          message: isDebugMode ? errorDetails.message : "Invalid credentials",
+          details: isDebugMode ? {
+            keycloakError: error.response?.data?.error,
+            keycloakErrorDescription: error.response?.data?.error_description,
+            endpoint: errorDetails.endpoint
+          } : {}
         }
       });
     }
@@ -121,8 +143,19 @@ const authOverrideController = {
       strapi.log.info("🔵 Redirecting to Keycloak authorization endpoint...");
       return ctx.redirect(authUrl.toString());
     } catch (error) {
+      const config2 = strapi.config.get("plugin::strapi-keycloak-passport");
+      const isDebugMode = config2?.debug === true;
       strapi.log.error("🔴 Failed to initiate OAuth2 authorization:", error.message);
-      return ctx.badRequest("Failed to initiate authorization");
+      if (isDebugMode) {
+        strapi.log.debug("🔍 Debug - Authorization initiation error details:", {
+          errorMessage: error.message,
+          errorStack: error.stack,
+          redirectUri: config2?.KEYCLOAK_REDIRECT_URI,
+          authUrl: config2?.KEYCLOAK_AUTH_URL,
+          realm: config2?.KEYCLOAK_REALM
+        });
+      }
+      return ctx.badRequest(isDebugMode ? `Failed to initiate authorization: ${error.message}` : "Failed to initiate authorization");
     }
   },
   /**
@@ -141,18 +174,33 @@ const authOverrideController = {
   async callback(ctx) {
     try {
       const { code, state, error, error_description } = ctx.query;
+      const config2 = strapi.config.get("plugin::strapi-keycloak-passport");
+      const isDebugMode = config2?.debug === true;
       if (error) {
         strapi.log.error(`🔴 Keycloak authorization error: ${error} - ${error_description}`);
-        return ctx.redirect("/admin/auth/login?error=authorization_failed");
+        if (isDebugMode) {
+          strapi.log.debug("🔍 Debug - Keycloak authorization error details:", {
+            error,
+            errorDescription: error_description,
+            queryParams: ctx.query
+          });
+        }
+        const errorParam = isDebugMode ? `authorization_failed&error_detail=${encodeURIComponent(error_description || error)}` : "authorization_failed";
+        return ctx.redirect(`/admin/auth/login?error=${errorParam}`);
       }
       if (!code) {
         return ctx.badRequest("Missing authorization code");
       }
       if (ctx.session?.oauth2State && state !== ctx.session.oauth2State) {
         strapi.log.error("🔴 Invalid state parameter - possible CSRF attack");
+        if (isDebugMode) {
+          strapi.log.debug("🔍 Debug - CSRF state mismatch:", {
+            expectedState: ctx.session?.oauth2State,
+            receivedState: state
+          });
+        }
         return ctx.badRequest("Invalid state parameter");
       }
-      const config2 = strapi.config.get("plugin::strapi-keycloak-passport");
       const redirectUri = config2.KEYCLOAK_REDIRECT_URI;
       const tokenResponse = await axios__default.default.post(
         `${config2.KEYCLOAK_AUTH_URL}/realms/${config2.KEYCLOAK_REALM}/protocol/openid-connect/token`,
@@ -185,8 +233,22 @@ const authOverrideController = {
       };
       return ctx.redirect(`/admin/auth/login?loginToken=${jwt}`);
     } catch (error) {
+      const config2 = strapi.config.get("plugin::strapi-keycloak-passport");
+      const isDebugMode = config2?.debug === true;
       strapi.log.error("🔴 OAuth2 callback failed:", error.response?.data || error.message);
-      return ctx.redirect("/admin/auth/login?error=authentication_failed");
+      if (isDebugMode) {
+        strapi.log.debug("🔍 Debug - OAuth2 callback error details:", {
+          errorMessage: error.message,
+          errorStack: error.stack,
+          responseStatus: error.response?.status,
+          responseData: error.response?.data,
+          requestUrl: error.config?.url,
+          tokenEndpoint: `${config2?.KEYCLOAK_AUTH_URL}/realms/${config2?.KEYCLOAK_REALM}/protocol/openid-connect/token`,
+          userInfoEndpoint: `${config2?.KEYCLOAK_AUTH_URL}/realms/${config2?.KEYCLOAK_REALM}/protocol/openid-connect/userinfo`
+        });
+      }
+      const errorMessage = isDebugMode ? `authentication_failed&error_detail=${encodeURIComponent(error.response?.data?.error_description || error.message)}` : "authentication_failed";
+      return ctx.redirect(`/admin/auth/login?error=${errorMessage}`);
     }
   },
   /**
@@ -208,8 +270,18 @@ const authOverrideController = {
       strapi.log.info("🔵 Generated Keycloak logout URL.");
       return ctx.send({ logoutUrl: logoutUrl.toString() });
     } catch (error) {
+      const config2 = strapi.config.get("plugin::strapi-keycloak-passport");
+      const isDebugMode = config2?.debug === true;
       strapi.log.error("🔴 Failed to generate logout URL:", error.message);
-      return ctx.badRequest("Failed to generate logout URL");
+      if (isDebugMode) {
+        strapi.log.debug("🔍 Debug - Logout URL generation error details:", {
+          errorMessage: error.message,
+          errorStack: error.stack,
+          authUrl: config2?.KEYCLOAK_AUTH_URL,
+          realm: config2?.KEYCLOAK_REALM
+        });
+      }
+      return ctx.badRequest(isDebugMode ? `Failed to generate logout URL: ${error.message}` : "Failed to generate logout URL");
     }
   },
   /**
@@ -237,8 +309,19 @@ const authOverrideController = {
       strapi.log.info("🔵 Generated Keycloak authorization URL.");
       return ctx.send({ authorizationUrl: authUrl.toString(), state });
     } catch (error) {
+      const config2 = strapi.config.get("plugin::strapi-keycloak-passport");
+      const isDebugMode = config2?.debug === true;
       strapi.log.error("🔴 Failed to generate authorization URL:", error.message);
-      return ctx.badRequest("Failed to generate authorization URL");
+      if (isDebugMode) {
+        strapi.log.debug("🔍 Debug - Authorization URL generation error details:", {
+          errorMessage: error.message,
+          errorStack: error.stack,
+          authUrl: config2?.KEYCLOAK_AUTH_URL,
+          realm: config2?.KEYCLOAK_REALM,
+          redirectUri: config2?.KEYCLOAK_REDIRECT_URI
+        });
+      }
+      return ctx.badRequest(isDebugMode ? `Failed to generate authorization URL: ${error.message}` : "Failed to generate authorization URL");
     }
   }
 };
@@ -340,6 +423,7 @@ const config = {
     KEYCLOAK_USERINFO_URL: "",
     KEYCLOAK_REDIRECT_URI: "",
     KEYCLOAK_LOGOUT_REDIRECT_URI: "",
+    debug: false,
     roleConfigs: {
       defaultRoleId: 5,
       excludedRoles: []
@@ -405,22 +489,49 @@ const authController = {
   async getRoles(ctx) {
     try {
       const config2 = strapi.config.get("plugin::strapi-keycloak-passport");
+      const isDebugMode = config2?.debug === true;
       const accessToken = await strapi.plugin("strapi-keycloak-passport").service("keycloakService").fetchAdminToken();
+      const rolesEndpoint = `${config2.KEYCLOAK_AUTH_URL}/auth/admin/realms/${config2.KEYCLOAK_REALM}/roles`;
+      if (isDebugMode) {
+        strapi.log.debug("🔍 Debug - Fetching Keycloak roles from:", {
+          rolesEndpoint,
+          excludedRoles: config2.roleConfigs.excludedRoles
+        });
+      }
       const rolesResponse = await axios__default.default.get(
-        `${config2.KEYCLOAK_AUTH_URL}/auth/admin/realms/${config2.KEYCLOAK_REALM}/roles`,
+        rolesEndpoint,
         { headers: { Authorization: `Bearer ${accessToken}` } }
       );
       const keycloakRoles = rolesResponse.data.filter(
         (role) => !config2.roleConfigs.excludedRoles.includes(role.name)
       );
       const strapiRoles = await strapi.entityService.findMany("admin::role", {});
+      if (isDebugMode) {
+        strapi.log.debug("🔍 Debug - Fetched roles:", {
+          keycloakRolesCount: keycloakRoles.length,
+          strapiRolesCount: strapiRoles.length,
+          keycloakRoleNames: keycloakRoles.map((r) => r.name),
+          strapiRoleNames: strapiRoles.map((r) => r.name)
+        });
+      }
       return ctx.send({ keycloakRoles, strapiRoles });
     } catch (error) {
+      const config2 = strapi.config.get("plugin::strapi-keycloak-passport");
+      const isDebugMode = config2?.debug === true;
       strapi.log.error(
         '❌ Failed to fetch Keycloak roles: Have you tried giving the role "MANAGE-REALM" and "MANAGE-USERS"?',
         error.response?.data || error.message
       );
-      return ctx.badRequest("Failed to fetch Keycloak roles");
+      if (isDebugMode) {
+        strapi.log.debug("🔍 Debug - Keycloak roles fetch error details:", {
+          errorMessage: error.message,
+          errorStack: error.stack,
+          responseStatus: error.response?.status,
+          responseData: error.response?.data,
+          rolesEndpoint: `${config2?.KEYCLOAK_AUTH_URL}/auth/admin/realms/${config2?.KEYCLOAK_REALM}/roles`
+        });
+      }
+      return ctx.badRequest(isDebugMode ? `Failed to fetch Keycloak roles: ${error.response?.data?.error_description || error.message}` : "Failed to fetch Keycloak roles");
     }
   },
   /**
@@ -441,8 +552,16 @@ const authController = {
       }, {});
       return ctx.send(formattedMappings);
     } catch (error) {
+      const config2 = strapi.config.get("plugin::strapi-keycloak-passport");
+      const isDebugMode = config2?.debug === true;
       strapi.log.error("❌ Failed to retrieve role mappings:", error.response?.data || error.message);
-      return ctx.badRequest("Failed to retrieve role mappings");
+      if (isDebugMode) {
+        strapi.log.debug("🔍 Debug - Role mappings retrieval error details:", {
+          errorMessage: error.message,
+          errorStack: error.stack
+        });
+      }
+      return ctx.badRequest(isDebugMode ? `Failed to retrieve role mappings: ${error.message}` : "Failed to retrieve role mappings");
     }
   },
   /**
@@ -459,12 +578,28 @@ const authController = {
    */
   async saveRoleMappings(ctx) {
     try {
+      const config2 = strapi.config.get("plugin::strapi-keycloak-passport");
+      const isDebugMode = config2?.debug === true;
       const { mappings } = ctx.request.body;
+      if (isDebugMode) {
+        strapi.log.debug("🔍 Debug - Saving role mappings:", {
+          mappings
+        });
+      }
       await strapi.plugin("strapi-keycloak-passport").service("roleMappingService").saveMappings(mappings);
       return ctx.send({ message: "Mappings saved successfully." });
     } catch (error) {
+      const config2 = strapi.config.get("plugin::strapi-keycloak-passport");
+      const isDebugMode = config2?.debug === true;
       strapi.log.error("❌ Failed to save role mappings:", error.response?.data || error.message);
-      return ctx.badRequest("Failed to save role mappings");
+      if (isDebugMode) {
+        strapi.log.debug("🔍 Debug - Role mappings save error details:", {
+          errorMessage: error.message,
+          errorStack: error.stack,
+          requestBody: ctx.request.body
+        });
+      }
+      return ctx.badRequest(isDebugMode ? `Failed to save role mappings: ${error.message}` : "Failed to save role mappings");
     }
   }
 };
@@ -600,12 +735,23 @@ const adminUserService = ({ strapi: strapi2 }) => ({
    * @returns {Promise<Object>} The created or updated Strapi admin user.
    */
   async findOrCreate(userInfo) {
+    const config2 = strapi2.config.get("plugin::strapi-keycloak-passport");
+    const isDebugMode = config2?.debug === true;
     try {
       const email = userInfo.email;
       const username = userInfo.preferred_username || "";
       const firstname = userInfo.given_name || "";
       const lastname = userInfo.family_name || "";
       const keycloakUserId = userInfo.sub;
+      if (isDebugMode) {
+        strapi2.log.debug("🔍 Debug - Finding or creating admin user:", {
+          email,
+          username,
+          firstname,
+          lastname,
+          keycloakUserId
+        });
+      }
       const [adminUser] = await strapi2.entityService.findMany("admin::user", {
         filters: { email },
         populate: { roles: true },
@@ -616,15 +762,46 @@ const adminUserService = ({ strapi: strapi2 }) => ({
       let appliedRoles = /* @__PURE__ */ new Set();
       try {
         const keycloakRoles = await fetchKeycloakUserRoles(keycloakUserId, strapi2);
+        if (isDebugMode) {
+          strapi2.log.debug("🔍 Debug - Keycloak roles for user:", {
+            keycloakUserId,
+            keycloakRoles,
+            availableMappings: roleMappings
+          });
+        }
         keycloakRoles.forEach((role) => {
           const mappedRole = roleMappings.find((mapped) => mapped.keycloakRole === role);
           if (mappedRole) appliedRoles.add(mappedRole.strapiRole);
         });
+        if (isDebugMode) {
+          strapi2.log.debug("🔍 Debug - Applied Strapi roles:", {
+            appliedRoles: Array.from(appliedRoles),
+            defaultRoleId: DEFAULT_ROLE_ID
+          });
+        }
       } catch (error) {
         strapi2.log.error("❌ Failed to fetch user roles from Keycloak:", error.response?.data || error.message);
+        if (isDebugMode) {
+          strapi2.log.debug("🔍 Debug - Keycloak role fetch error details:", {
+            errorMessage: error.message,
+            errorStack: error.stack,
+            responseStatus: error.response?.status,
+            responseData: error.response?.data,
+            keycloakUserId
+          });
+        }
       }
       const userRoles = appliedRoles.size ? Array.from(appliedRoles) : [DEFAULT_ROLE_ID];
       if (!adminUser) {
+        if (isDebugMode) {
+          strapi2.log.debug("🔍 Debug - Creating new admin user:", {
+            email,
+            firstname,
+            lastname,
+            username,
+            roles: userRoles
+          });
+        }
         await strapi2.entityService.create("admin::user", {
           data: {
             email,
@@ -637,6 +814,13 @@ const adminUserService = ({ strapi: strapi2 }) => ({
         });
       }
       if (JSON.stringify(adminUser.roles) !== JSON.stringify(userRoles)) {
+        if (isDebugMode) {
+          strapi2.log.debug("🔍 Debug - Updating admin user roles:", {
+            email,
+            previousRoles: adminUser.roles,
+            newRoles: userRoles
+          });
+        }
         await strapi2.documents("admin::user").update({
           documentId: adminUser.documentId,
           data: {
@@ -649,23 +833,59 @@ const adminUserService = ({ strapi: strapi2 }) => ({
       return adminUser;
     } catch (error) {
       strapi2.log.error("❌ Failed to create/update user:", error.message);
-      throw new Error("Failed to create/update user.");
+      if (isDebugMode) {
+        strapi2.log.debug("🔍 Debug - User creation/update error details:", {
+          errorMessage: error.message,
+          errorStack: error.stack,
+          userInfo: {
+            email: userInfo.email,
+            sub: userInfo.sub,
+            preferredUsername: userInfo.preferred_username
+          }
+        });
+      }
+      throw new Error(isDebugMode ? `Failed to create/update user: ${error.message}` : "Failed to create/update user.");
     }
   }
 });
 async function fetchKeycloakUserRoles(keycloakUserId, strapi2) {
   if (!keycloakUserId) throw new Error("❌ Keycloak user ID is missing!");
   const config2 = strapi2.config.get("plugin::strapi-keycloak-passport");
+  const isDebugMode = config2?.debug === true;
   try {
     const accessToken = await strapi2.plugin("strapi-keycloak-passport").service("keycloakService").fetchAdminToken();
+    const rolesEndpoint = `${config2.KEYCLOAK_AUTH_URL}/auth/admin/realms/${config2.KEYCLOAK_REALM}/users/${keycloakUserId}/role-mappings/realm`;
+    if (isDebugMode) {
+      strapi2.log.debug("🔍 Debug - Fetching user roles from Keycloak:", {
+        keycloakUserId,
+        rolesEndpoint
+      });
+    }
     const rolesResponse = await axios__default.default.get(
-      `${config2.KEYCLOAK_AUTH_URL}/auth/admin/realms/${config2.KEYCLOAK_REALM}/users/${keycloakUserId}/role-mappings/realm`,
+      rolesEndpoint,
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
-    return rolesResponse.data.map((role) => role.name);
+    const roles = rolesResponse.data.map((role) => role.name);
+    if (isDebugMode) {
+      strapi2.log.debug("🔍 Debug - Fetched Keycloak user roles:", {
+        keycloakUserId,
+        roles
+      });
+    }
+    return roles;
   } catch (error) {
     strapi2.log.error("❌ Failed to fetch Keycloak user roles:", error.response?.data || error.message);
-    throw new Error("Failed to fetch Keycloak user roles.");
+    if (isDebugMode) {
+      strapi2.log.debug("🔍 Debug - Keycloak user roles fetch error details:", {
+        errorMessage: error.message,
+        errorStack: error.stack,
+        responseStatus: error.response?.status,
+        responseData: error.response?.data,
+        keycloakUserId,
+        rolesEndpoint: `${config2.KEYCLOAK_AUTH_URL}/auth/admin/realms/${config2.KEYCLOAK_REALM}/users/${keycloakUserId}/role-mappings/realm`
+      });
+    }
+    throw new Error(isDebugMode ? `Failed to fetch Keycloak user roles: ${error.response?.data?.error_description || error.message}` : "Failed to fetch Keycloak user roles.");
   }
 }
 const roleMappingService = ({ strapi: strapi2 }) => ({
@@ -725,9 +945,18 @@ const keycloakService = ({ strapi: strapi2 }) => ({
    */
   async fetchAdminToken() {
     const config2 = strapi2.config.get("plugin::strapi-keycloak-passport");
+    const isDebugMode = config2?.debug === true;
     try {
+      const tokenEndpoint = `${config2.KEYCLOAK_AUTH_URL}/auth/realms/${config2.KEYCLOAK_REALM}/protocol/openid-connect/token`;
+      if (isDebugMode) {
+        strapi2.log.debug("🔍 Debug - Fetching admin token from Keycloak:", {
+          tokenEndpoint,
+          clientId: config2.KEYCLOAK_CLIENT_ID,
+          grantType: "client_credentials"
+        });
+      }
       const tokenResponse = await axios__default.default.post(
-        `${config2.KEYCLOAK_AUTH_URL}/auth/realms/${config2.KEYCLOAK_REALM}/protocol/openid-connect/token`,
+        tokenEndpoint,
         new URLSearchParams({
           client_id: config2.KEYCLOAK_CLIENT_ID,
           client_secret: config2.KEYCLOAK_CLIENT_SECRET,
@@ -742,11 +971,28 @@ const keycloakService = ({ strapi: strapi2 }) => ({
       strapi2.log.info("✅ Successfully fetched Keycloak admin token.");
       return accessToken;
     } catch (error) {
-      strapi2.log.error("❌ Keycloak Admin Token Fetch Error:", {
+      const errorDetails = {
         status: error.response?.status || "Unknown",
-        message: error.response?.data || error.message
+        message: error.response?.data?.error_description || error.response?.data?.error || error.message,
+        responseData: error.response?.data || null
+      };
+      strapi2.log.error("❌ Keycloak Admin Token Fetch Error:", isDebugMode ? errorDetails : {
+        status: errorDetails.status,
+        message: errorDetails.message
       });
-      throw new Error("Failed to fetch Keycloak admin token");
+      if (isDebugMode) {
+        strapi2.log.debug("🔍 Debug - Admin token fetch error details:", {
+          errorMessage: error.message,
+          errorStack: error.stack,
+          responseStatus: error.response?.status,
+          responseData: error.response?.data,
+          requestUrl: error.config?.url,
+          tokenEndpoint: `${config2.KEYCLOAK_AUTH_URL}/auth/realms/${config2.KEYCLOAK_REALM}/protocol/openid-connect/token`,
+          clientId: config2.KEYCLOAK_CLIENT_ID
+        });
+      }
+      const detailedMessage = isDebugMode ? `Failed to fetch Keycloak admin token: ${errorDetails.message}` : "Failed to fetch Keycloak admin token";
+      throw new Error(detailedMessage);
     }
   }
 });

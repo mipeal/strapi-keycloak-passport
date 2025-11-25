@@ -17,11 +17,22 @@ const keycloakService = ({ strapi }) => ({
    */
   async fetchAdminToken() {
     const config = strapi.config.get('plugin::strapi-keycloak-passport');
+    const isDebugMode = config?.debug === true;
 
     try {
+      const tokenEndpoint = `${config.KEYCLOAK_AUTH_URL}/auth/realms/${config.KEYCLOAK_REALM}/protocol/openid-connect/token`;
+
+      if (isDebugMode) {
+        strapi.log.debug('🔍 Debug - Fetching admin token from Keycloak:', {
+          tokenEndpoint,
+          clientId: config.KEYCLOAK_CLIENT_ID,
+          grantType: 'client_credentials',
+        });
+      }
+
       // 🔥 Send request to Keycloak for an admin token
       const tokenResponse = await axios.post(
-        `${config.KEYCLOAK_AUTH_URL}/auth/realms/${config.KEYCLOAK_REALM}/protocol/openid-connect/token`,
+        tokenEndpoint,
         new URLSearchParams({
           client_id: config.KEYCLOAK_CLIENT_ID,
           client_secret: config.KEYCLOAK_CLIENT_SECRET,
@@ -41,12 +52,34 @@ const keycloakService = ({ strapi }) => ({
       strapi.log.info('✅ Successfully fetched Keycloak admin token.');
       return accessToken;
     } catch (error) {
-      strapi.log.error('❌ Keycloak Admin Token Fetch Error:', {
+      const errorDetails = {
         status: error.response?.status || 'Unknown',
-        message: error.response?.data || error.message,
+        message: error.response?.data?.error_description || error.response?.data?.error || error.message,
+        responseData: error.response?.data || null,
+      };
+
+      strapi.log.error('❌ Keycloak Admin Token Fetch Error:', isDebugMode ? errorDetails : {
+        status: errorDetails.status,
+        message: errorDetails.message,
       });
 
-      throw new Error('Failed to fetch Keycloak admin token');
+      if (isDebugMode) {
+        strapi.log.debug('🔍 Debug - Admin token fetch error details:', {
+          errorMessage: error.message,
+          errorStack: error.stack,
+          responseStatus: error.response?.status,
+          responseData: error.response?.data,
+          requestUrl: error.config?.url,
+          tokenEndpoint: `${config.KEYCLOAK_AUTH_URL}/auth/realms/${config.KEYCLOAK_REALM}/protocol/openid-connect/token`,
+          clientId: config.KEYCLOAK_CLIENT_ID,
+        });
+      }
+
+      const detailedMessage = isDebugMode
+        ? `Failed to fetch Keycloak admin token: ${errorDetails.message}`
+        : 'Failed to fetch Keycloak admin token';
+
+      throw new Error(detailedMessage);
     }
   },
 });

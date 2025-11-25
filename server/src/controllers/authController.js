@@ -19,6 +19,7 @@ export default {
   async getRoles(ctx) {
     try {
       const config = strapi.config.get('plugin::strapi-keycloak-passport');
+      const isDebugMode = config?.debug === true;
 
       // 🔑 Get Admin Token
       const accessToken = await strapi
@@ -26,9 +27,18 @@ export default {
         .service('keycloakService')
         .fetchAdminToken();
 
+      const rolesEndpoint = `${config.KEYCLOAK_AUTH_URL}/auth/admin/realms/${config.KEYCLOAK_REALM}/roles`;
+
+      if (isDebugMode) {
+        strapi.log.debug('🔍 Debug - Fetching Keycloak roles from:', {
+          rolesEndpoint,
+          excludedRoles: config.roleConfigs.excludedRoles,
+        });
+      }
+
       // 🔍 Fetch Keycloak Roles using Admin Token
       const rolesResponse = await axios.get(
-        `${config.KEYCLOAK_AUTH_URL}/auth/admin/realms/${config.KEYCLOAK_REALM}/roles`,
+        rolesEndpoint,
         { headers: { Authorization: `Bearer ${accessToken}` } }
       );
 
@@ -40,13 +50,36 @@ export default {
       /** @type {Object[]} */
       const strapiRoles = await strapi.entityService.findMany('admin::role', {});
 
+      if (isDebugMode) {
+        strapi.log.debug('🔍 Debug - Fetched roles:', {
+          keycloakRolesCount: keycloakRoles.length,
+          strapiRolesCount: strapiRoles.length,
+          keycloakRoleNames: keycloakRoles.map(r => r.name),
+          strapiRoleNames: strapiRoles.map(r => r.name),
+        });
+      }
+
       return ctx.send({ keycloakRoles, strapiRoles });
     } catch (error) {
+      const config = strapi.config.get('plugin::strapi-keycloak-passport');
+      const isDebugMode = config?.debug === true;
+
       strapi.log.error(
         '❌ Failed to fetch Keycloak roles: Have you tried giving the role "MANAGE-REALM" and "MANAGE-USERS"?',
         error.response?.data || error.message
       );
-      return ctx.badRequest('Failed to fetch Keycloak roles');
+
+      if (isDebugMode) {
+        strapi.log.debug('🔍 Debug - Keycloak roles fetch error details:', {
+          errorMessage: error.message,
+          errorStack: error.stack,
+          responseStatus: error.response?.status,
+          responseData: error.response?.data,
+          rolesEndpoint: `${config?.KEYCLOAK_AUTH_URL}/auth/admin/realms/${config?.KEYCLOAK_REALM}/roles`,
+        });
+      }
+
+      return ctx.badRequest(isDebugMode ? `Failed to fetch Keycloak roles: ${error.response?.data?.error_description || error.message}` : 'Failed to fetch Keycloak roles');
     }
   },
 
@@ -74,8 +107,19 @@ export default {
 
       return ctx.send(formattedMappings);
     } catch (error) {
+      const config = strapi.config.get('plugin::strapi-keycloak-passport');
+      const isDebugMode = config?.debug === true;
+
       strapi.log.error('❌ Failed to retrieve role mappings:', error.response?.data || error.message);
-      return ctx.badRequest('Failed to retrieve role mappings');
+
+      if (isDebugMode) {
+        strapi.log.debug('🔍 Debug - Role mappings retrieval error details:', {
+          errorMessage: error.message,
+          errorStack: error.stack,
+        });
+      }
+
+      return ctx.badRequest(isDebugMode ? `Failed to retrieve role mappings: ${error.message}` : 'Failed to retrieve role mappings');
     }
   },
 
@@ -93,8 +137,17 @@ export default {
    */
   async saveRoleMappings(ctx) {
     try {
+      const config = strapi.config.get('plugin::strapi-keycloak-passport');
+      const isDebugMode = config?.debug === true;
+
       /** @type {Object<string, number>} */
       const { mappings } = ctx.request.body;
+
+      if (isDebugMode) {
+        strapi.log.debug('🔍 Debug - Saving role mappings:', {
+          mappings,
+        });
+      }
 
       await strapi.plugin('strapi-keycloak-passport')
         .service('roleMappingService')
@@ -102,8 +155,20 @@ export default {
 
       return ctx.send({ message: 'Mappings saved successfully.' });
     } catch (error) {
+      const config = strapi.config.get('plugin::strapi-keycloak-passport');
+      const isDebugMode = config?.debug === true;
+
       strapi.log.error('❌ Failed to save role mappings:', error.response?.data || error.message);
-      return ctx.badRequest('Failed to save role mappings');
+
+      if (isDebugMode) {
+        strapi.log.debug('🔍 Debug - Role mappings save error details:', {
+          errorMessage: error.message,
+          errorStack: error.stack,
+          requestBody: ctx.request.body,
+        });
+      }
+
+      return ctx.badRequest(isDebugMode ? `Failed to save role mappings: ${error.message}` : 'Failed to save role mappings');
     }
   },
 };
