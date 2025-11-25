@@ -1,4 +1,17 @@
 import axios from "axios";
+import crypto from "crypto";
+function generateState() {
+  return crypto.randomUUID();
+}
+function buildAuthorizationUrl(config2, redirectUri, state) {
+  const authUrl = new URL(`${config2.KEYCLOAK_AUTH_URL}/realms/${config2.KEYCLOAK_REALM}/protocol/openid-connect/auth`);
+  authUrl.searchParams.set("client_id", config2.KEYCLOAK_CLIENT_ID);
+  authUrl.searchParams.set("response_type", "code");
+  authUrl.searchParams.set("redirect_uri", redirectUri);
+  authUrl.searchParams.set("scope", "openid email profile");
+  authUrl.searchParams.set("state", state);
+  return authUrl;
+}
 const authOverrideController = {
   /**
    * Handles Keycloak login and synchronizes the user with Strapi.
@@ -95,17 +108,12 @@ const authOverrideController = {
       if (!redirectUri) {
         return ctx.badRequest("KEYCLOAK_REDIRECT_URI is not configured");
       }
-      const state = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+      const state = generateState();
       ctx.session = {
         ...ctx.session,
         oauth2State: state
       };
-      const authUrl = new URL(`${config2.KEYCLOAK_AUTH_URL}/realms/${config2.KEYCLOAK_REALM}/protocol/openid-connect/auth`);
-      authUrl.searchParams.set("client_id", config2.KEYCLOAK_CLIENT_ID);
-      authUrl.searchParams.set("response_type", "code");
-      authUrl.searchParams.set("redirect_uri", redirectUri);
-      authUrl.searchParams.set("scope", "openid email profile");
-      authUrl.searchParams.set("state", state);
+      const authUrl = buildAuthorizationUrl(config2, redirectUri, state);
       strapi.log.info("🔵 Redirecting to Keycloak authorization endpoint...");
       return ctx.redirect(authUrl.toString());
     } catch (error) {
@@ -216,17 +224,12 @@ const authOverrideController = {
       if (!redirectUri) {
         return ctx.badRequest("KEYCLOAK_REDIRECT_URI is not configured");
       }
-      const state = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+      const state = generateState();
       ctx.session = {
         ...ctx.session,
         oauth2State: state
       };
-      const authUrl = new URL(`${config2.KEYCLOAK_AUTH_URL}/realms/${config2.KEYCLOAK_REALM}/protocol/openid-connect/auth`);
-      authUrl.searchParams.set("client_id", config2.KEYCLOAK_CLIENT_ID);
-      authUrl.searchParams.set("response_type", "code");
-      authUrl.searchParams.set("redirect_uri", redirectUri);
-      authUrl.searchParams.set("scope", "openid email profile");
-      authUrl.searchParams.set("state", state);
+      const authUrl = buildAuthorizationUrl(config2, redirectUri, state);
       strapi.log.info("🔵 Generated Keycloak authorization URL.");
       return ctx.send({ authorizationUrl: authUrl.toString(), state });
     } catch (error) {

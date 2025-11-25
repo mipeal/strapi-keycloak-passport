@@ -1,6 +1,36 @@
 'use strict';
 
 import axios from 'axios';
+import crypto from 'crypto';
+
+/**
+ * Generates a cryptographically secure random state for CSRF protection.
+ *
+ * @function generateState
+ * @returns {string} A random state string.
+ */
+function generateState() {
+  return crypto.randomUUID();
+}
+
+/**
+ * Builds the Keycloak authorization URL.
+ *
+ * @function buildAuthorizationUrl
+ * @param {Object} config - Plugin configuration.
+ * @param {string} redirectUri - The redirect URI.
+ * @param {string} state - The CSRF state parameter.
+ * @returns {URL} The Keycloak authorization URL.
+ */
+function buildAuthorizationUrl(config, redirectUri, state) {
+  const authUrl = new URL(`${config.KEYCLOAK_AUTH_URL}/realms/${config.KEYCLOAK_REALM}/protocol/openid-connect/auth`);
+  authUrl.searchParams.set('client_id', config.KEYCLOAK_CLIENT_ID);
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('redirect_uri', redirectUri);
+  authUrl.searchParams.set('scope', 'openid email profile');
+  authUrl.searchParams.set('state', state);
+  return authUrl;
+}
 
 /**
  * @module AuthOverrideController
@@ -134,8 +164,8 @@ export default {
         return ctx.badRequest('KEYCLOAK_REDIRECT_URI is not configured');
       }
 
-      // Generate a random state parameter for CSRF protection
-      const state = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+      // Generate a cryptographically secure state parameter for CSRF protection
+      const state = generateState();
 
       // Store state in session for validation during callback
       ctx.session = {
@@ -144,12 +174,7 @@ export default {
       };
 
       // Build the Keycloak authorization URL
-      const authUrl = new URL(`${config.KEYCLOAK_AUTH_URL}/realms/${config.KEYCLOAK_REALM}/protocol/openid-connect/auth`);
-      authUrl.searchParams.set('client_id', config.KEYCLOAK_CLIENT_ID);
-      authUrl.searchParams.set('response_type', 'code');
-      authUrl.searchParams.set('redirect_uri', redirectUri);
-      authUrl.searchParams.set('scope', 'openid email profile');
-      authUrl.searchParams.set('state', state);
+      const authUrl = buildAuthorizationUrl(config, redirectUri, state);
 
       strapi.log.info('🔵 Redirecting to Keycloak authorization endpoint...');
       return ctx.redirect(authUrl.toString());
@@ -307,8 +332,8 @@ export default {
         return ctx.badRequest('KEYCLOAK_REDIRECT_URI is not configured');
       }
 
-      // Generate a random state parameter for CSRF protection
-      const state = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+      // Generate a cryptographically secure state parameter for CSRF protection
+      const state = generateState();
 
       // Store state in session for validation during callback
       ctx.session = {
@@ -317,12 +342,7 @@ export default {
       };
 
       // Build the Keycloak authorization URL
-      const authUrl = new URL(`${config.KEYCLOAK_AUTH_URL}/realms/${config.KEYCLOAK_REALM}/protocol/openid-connect/auth`);
-      authUrl.searchParams.set('client_id', config.KEYCLOAK_CLIENT_ID);
-      authUrl.searchParams.set('response_type', 'code');
-      authUrl.searchParams.set('redirect_uri', redirectUri);
-      authUrl.searchParams.set('scope', 'openid email profile');
-      authUrl.searchParams.set('state', state);
+      const authUrl = buildAuthorizationUrl(config, redirectUri, state);
 
       strapi.log.info('🔵 Generated Keycloak authorization URL.');
       return ctx.send({ authorizationUrl: authUrl.toString(), state });
