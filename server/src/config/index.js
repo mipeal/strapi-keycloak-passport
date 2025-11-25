@@ -8,6 +8,7 @@ export default {
     KEYCLOAK_USERINFO_URL: '',
     KEYCLOAK_REDIRECT_URI: '',
     KEYCLOAK_LOGOUT_REDIRECT_URI: '',
+    debug: false,
     roleConfigs: {
       defaultRoleId: 5,
       excludedRoles: [],

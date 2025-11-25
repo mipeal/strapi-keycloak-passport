@@ -56,6 +56,8 @@ module.exports = ({ env }) => ({
       // Legacy password grant (for Keycloak < 18)
       KEYCLOAK_TOKEN_URL: env('KEYCLOAK_PASSPORT_TOKEN_URL', '/realms/master/protocol/openid-connect/token'),
       KEYCLOAK_USERINFO_URL: env('KEYCLOAK_PASSPORT_USERINFO_URL', '/realms/master/protocol/openid-connect/userinfo'),
+      // Enable debug mode for detailed error messages (default: false)
+      debug: env.bool('KEYCLOAK_PASSPORT_DEBUG', false),
       roleConfigs: {
         defaultRoleId: env('KEYCLOAK_PASSPORT_DEFAULT_ROLE_ID', 5),
         excludedRoles: env('KEYCLOAK_PASSPORT_EXZIL_ROLES', [
@@ -82,6 +84,8 @@ module.exports = ({ env }) => ({
       KEYCLOAK_CLIENT_SECRET: env('KEYCLOAK_PASSPORT_CLIENT_SECRET', 'your-secret'),
       KEYCLOAK_TOKEN_URL: env('KEYCLOAK_PASSPORT_TOKEN_URL', '/token'),
       KEYCLOAK_USERINFO_URL: env('KEYCLOAK_PASSPORT_USERINFO_URL', '/userinfo'),
+      // Enable debug mode for detailed error messages (default: false)
+      debug: env.bool('KEYCLOAK_PASSPORT_DEBUG', false),
       roleConfigs: {
         defaultRoleId: env('KEYCLOAK_PASSPORT_DEFAULT_ROLE_ID', 5),
         excludedRoles: env('KEYCLOAK_PASSPORT_EXZIL_ROLES', [
@@ -108,6 +112,38 @@ module.exports = ({ env }) => ({
 | `KEYCLOAK_LOGOUT_REDIRECT_URI` | URL to redirect after Keycloak logout | Optional |
 | `KEYCLOAK_TOKEN_URL` | Token endpoint path (legacy) | For password grant |
 | `KEYCLOAK_USERINFO_URL` | UserInfo endpoint path (legacy) | For password grant |
+| `debug` | Enable detailed error messages during authentication (default: `false`) | Optional |
+
+---
+
+## 🔍 Debug Mode
+
+When `debug: true` is set in the plugin configuration, the plugin will output detailed error messages during authentication failures. This is useful for troubleshooting issues with Keycloak connectivity, misconfigured URLs, or credential problems.
+
+### What Debug Mode Provides:
+- **Detailed error messages** in API responses (including Keycloak error descriptions)
+- **Extended logging** with full error stacks, request URLs, and response data
+- **Endpoint information** showing which Keycloak URLs are being accessed
+- **Role mapping details** showing how Keycloak roles are mapped to Strapi roles
+
+### ⚠️ Security Warning
+**Do not enable debug mode in production environments** as it may expose sensitive information like endpoint URLs, error details, and internal configuration.
+
+### Enabling Debug Mode
+```javascript
+// config/plugins.js
+module.exports = ({ env }) => ({
+  'strapi-keycloak-passport': {
+    enabled: true,
+    config: {
+      // ... other config options
+      debug: env.bool('KEYCLOAK_PASSPORT_DEBUG', false),
+    },
+  },
+});
+```
+
+Set the environment variable `KEYCLOAK_PASSPORT_DEBUG=true` to enable debug mode.
 
 ---
 

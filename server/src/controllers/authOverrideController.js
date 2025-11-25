@@ -127,17 +127,41 @@ export default {
         },
       });
     } catch (error) {
+      const config = strapi.config.get('plugin::strapi-keycloak-passport');
+      const isDebugMode = config?.debug === true;
+      const errorDetails = {
+        status: error.response?.status || error?.status || 400,
+        message: error.response?.data?.error_description || error.response?.data?.error || error?.message || 'Invalid credentials',
+        name: error?.name ?? 'ApplicationError',
+        endpoint: `${config?.KEYCLOAK_AUTH_URL}${config?.KEYCLOAK_TOKEN_URL}`,
+        responseData: error.response?.data || null,
+      };
+
       strapi.log.error(
         `🔴 Authentication Failed for ${ctx.request.body?.email || 'unknown user'}:`,
-        error.response?.data || error.message
+        isDebugMode ? errorDetails : (error.response?.data || error.message)
       );
+
+      if (isDebugMode) {
+        strapi.log.debug('🔍 Debug - Full error details:', {
+          errorMessage: error.message,
+          errorStack: error.stack,
+          responseStatus: error.response?.status,
+          responseData: error.response?.data,
+          requestUrl: error.config?.url,
+        });
+      }
 
       return ctx.badRequest('Invalid credentials', {
         error: {
-          status: error?.status ?? 400,
-          name: error?.name ?? 'ApplicationError',
-          message: error?.message ?? 'Invalid credentials',
-          details: error?.details ?? {},
+          status: errorDetails.status,
+          name: errorDetails.name,
+          message: isDebugMode ? errorDetails.message : 'Invalid credentials',
+          details: isDebugMode ? {
+            keycloakError: error.response?.data?.error,
+            keycloakErrorDescription: error.response?.data?.error_description,
+            endpoint: errorDetails.endpoint,
+          } : {},
         },
       });
     }
@@ -179,8 +203,22 @@ export default {
       strapi.log.info('🔵 Redirecting to Keycloak authorization endpoint...');
       return ctx.redirect(authUrl.toString());
     } catch (error) {
+      const config = strapi.config.get('plugin::strapi-keycloak-passport');
+      const isDebugMode = config?.debug === true;
+
       strapi.log.error('🔴 Failed to initiate OAuth2 authorization:', error.message);
-      return ctx.badRequest('Failed to initiate authorization');
+
+      if (isDebugMode) {
+        strapi.log.debug('🔍 Debug - Authorization initiation error details:', {
+          errorMessage: error.message,
+          errorStack: error.stack,
+          redirectUri: config?.KEYCLOAK_REDIRECT_URI,
+          authUrl: config?.KEYCLOAK_AUTH_URL,
+          realm: config?.KEYCLOAK_REALM,
+        });
+      }
+
+      return ctx.badRequest(isDebugMode ? `Failed to initiate authorization: ${error.message}` : 'Failed to initiate authorization');
     }
   },
 
@@ -200,11 +238,25 @@ export default {
   async callback(ctx) {
     try {
       const { code, state, error, error_description } = ctx.query;
+      const config = strapi.config.get('plugin::strapi-keycloak-passport');
+      const isDebugMode = config?.debug === true;
 
       // Handle error response from Keycloak
       if (error) {
         strapi.log.error(`🔴 Keycloak authorization error: ${error} - ${error_description}`);
-        return ctx.redirect('/admin/auth/login?error=authorization_failed');
+
+        if (isDebugMode) {
+          strapi.log.debug('🔍 Debug - Keycloak authorization error details:', {
+            error,
+            errorDescription: error_description,
+            queryParams: ctx.query,
+          });
+        }
+
+        const errorParam = isDebugMode
+          ? `authorization_failed&error_detail=${encodeURIComponent(error_description || error)}`
+          : 'authorization_failed';
+        return ctx.redirect(`/admin/auth/login?error=${errorParam}`);
       }
 
       if (!code) {
@@ -214,11 +266,16 @@ export default {
       // Validate state parameter (CSRF protection)
       if (ctx.session?.oauth2State && state !== ctx.session.oauth2State) {
         strapi.log.error('🔴 Invalid state parameter - possible CSRF attack');
+
+        if (isDebugMode) {
+          strapi.log.debug('🔍 Debug - CSRF state mismatch:', {
+            expectedState: ctx.session?.oauth2State,
+            receivedState: state,
+          });
+        }
+
         return ctx.badRequest('Invalid state parameter');
       }
-
-      /** @type {Object} */
-      const config = strapi.config.get('plugin::strapi-keycloak-passport');
 
       /** @type {string} */
       const redirectUri = config.KEYCLOAK_REDIRECT_URI;
@@ -276,8 +333,27 @@ export default {
       // Redirect to admin panel with the JWT token
       return ctx.redirect(`/admin/auth/login?loginToken=${jwt}`);
     } catch (error) {
+      const config = strapi.config.get('plugin::strapi-keycloak-passport');
+      const isDebugMode = config?.debug === true;
+
       strapi.log.error('🔴 OAuth2 callback failed:', error.response?.data || error.message);
-      return ctx.redirect('/admin/auth/login?error=authentication_failed');
+
+      if (isDebugMode) {
+        strapi.log.debug('🔍 Debug - OAuth2 callback error details:', {
+          errorMessage: error.message,
+          errorStack: error.stack,
+          responseStatus: error.response?.status,
+          responseData: error.response?.data,
+          requestUrl: error.config?.url,
+          tokenEndpoint: `${config?.KEYCLOAK_AUTH_URL}/realms/${config?.KEYCLOAK_REALM}/protocol/openid-connect/token`,
+          userInfoEndpoint: `${config?.KEYCLOAK_AUTH_URL}/realms/${config?.KEYCLOAK_REALM}/protocol/openid-connect/userinfo`,
+        });
+      }
+
+      const errorMessage = isDebugMode
+        ? `authentication_failed&error_detail=${encodeURIComponent(error.response?.data?.error_description || error.message)}`
+        : 'authentication_failed';
+      return ctx.redirect(`/admin/auth/login?error=${errorMessage}`);
     }
   },
 
@@ -306,8 +382,21 @@ export default {
       strapi.log.info('🔵 Generated Keycloak logout URL.');
       return ctx.send({ logoutUrl: logoutUrl.toString() });
     } catch (error) {
+      const config = strapi.config.get('plugin::strapi-keycloak-passport');
+      const isDebugMode = config?.debug === true;
+
       strapi.log.error('🔴 Failed to generate logout URL:', error.message);
-      return ctx.badRequest('Failed to generate logout URL');
+
+      if (isDebugMode) {
+        strapi.log.debug('🔍 Debug - Logout URL generation error details:', {
+          errorMessage: error.message,
+          errorStack: error.stack,
+          authUrl: config?.KEYCLOAK_AUTH_URL,
+          realm: config?.KEYCLOAK_REALM,
+        });
+      }
+
+      return ctx.badRequest(isDebugMode ? `Failed to generate logout URL: ${error.message}` : 'Failed to generate logout URL');
     }
   },
 
@@ -347,8 +436,22 @@ export default {
       strapi.log.info('🔵 Generated Keycloak authorization URL.');
       return ctx.send({ authorizationUrl: authUrl.toString(), state });
     } catch (error) {
+      const config = strapi.config.get('plugin::strapi-keycloak-passport');
+      const isDebugMode = config?.debug === true;
+
       strapi.log.error('🔴 Failed to generate authorization URL:', error.message);
-      return ctx.badRequest('Failed to generate authorization URL');
+
+      if (isDebugMode) {
+        strapi.log.debug('🔍 Debug - Authorization URL generation error details:', {
+          errorMessage: error.message,
+          errorStack: error.stack,
+          authUrl: config?.KEYCLOAK_AUTH_URL,
+          realm: config?.KEYCLOAK_REALM,
+          redirectUri: config?.KEYCLOAK_REDIRECT_URI,
+        });
+      }
+
+      return ctx.badRequest(isDebugMode ? `Failed to generate authorization URL: ${error.message}` : 'Failed to generate authorization URL');
     }
   },
 };
