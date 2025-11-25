@@ -6,13 +6,53 @@ import checkAdminPermission from '../middlewares/checkAdminPermission';
  * @module Routes
  */
 const routes = [
-  // ✅ Override Admin Login with Keycloak
+  // ✅ Override Admin Login with Keycloak (password grant - legacy for Keycloak < 18)
   {
     method: 'POST',
     path: '/admin/login',
     handler: 'authOverrideController.login',
     config: {
       auth: false, // No auth required for login
+    },
+  },
+
+  // ✅ OAuth2 Authorization Code Flow - Initiate (Keycloak 18+)
+  {
+    method: 'GET',
+    path: '/authorize',
+    handler: 'authOverrideController.authorize',
+    config: {
+      auth: false, // No auth required to initiate OAuth2 flow
+    },
+  },
+
+  // ✅ OAuth2 Authorization Code Flow - Callback (Keycloak 18+)
+  {
+    method: 'GET',
+    path: '/callback',
+    handler: 'authOverrideController.callback',
+    config: {
+      auth: false, // No auth required for OAuth2 callback
+    },
+  },
+
+  // ✅ Get Authorization URL for OAuth2 flow (Keycloak 18+)
+  {
+    method: 'GET',
+    path: '/authorization-url',
+    handler: 'authOverrideController.getAuthorizationUrl',
+    config: {
+      auth: false, // No auth required to get authorization URL
+    },
+  },
+
+  // ✅ Get Keycloak Logout URL
+  {
+    method: 'GET',
+    path: '/logout-url',
+    handler: 'authOverrideController.getLogoutUrl',
+    config: {
+      auth: false, // No auth required to get logout URL
     },
   },
 

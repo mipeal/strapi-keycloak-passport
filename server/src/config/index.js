@@ -6,6 +6,8 @@ export default {
     KEYCLOAK_CLIENT_SECRET: '',
     KEYCLOAK_TOKEN_URL: '',
     KEYCLOAK_USERINFO_URL: '',
+    KEYCLOAK_REDIRECT_URI: '',
+    KEYCLOAK_LOGOUT_REDIRECT_URI: '',
     roleConfigs: {
       defaultRoleId: 5,
       excludedRoles: [],
