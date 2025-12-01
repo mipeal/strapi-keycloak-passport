@@ -32,35 +32,115 @@ const authOverrideController = {
     try {
       const email = ctx.request.body?.email;
       const password = ctx.request.body?.password;
+      strapi.log.debug("🔍 Login request body:", { email, hasPassword: !!password });
       if (!email || !password) {
+        strapi.log.warn("⚠️ Missing email or password in login request");
         return ctx.badRequest("Missing email or password");
       }
       const config2 = strapi.config.get("plugin::strapi-keycloak-passport");
       strapi.log.info(`🔵 Authenticating ${email} via Keycloak Passport...`);
+      let tokenUrl;
+      if (config2.KEYCLOAK_TOKEN_URL) {
+        tokenUrl = config2.KEYCLOAK_TOKEN_URL.startsWith("http") ? config2.KEYCLOAK_TOKEN_URL : `${config2.KEYCLOAK_AUTH_URL}${config2.KEYCLOAK_TOKEN_URL}`;
+      } else {
+        tokenUrl = `${config2.KEYCLOAK_AUTH_URL}/realms/${config2.KEYCLOAK_REALM}/protocol/openid-connect/token`;
+      }
+      strapi.log.debug("🔍 Keycloak token endpoint:", tokenUrl);
+      strapi.log.debug("🔍 Keycloak config:", {
+        authUrl: config2.KEYCLOAK_AUTH_URL,
+        realm: config2.KEYCLOAK_REALM,
+        clientId: config2.KEYCLOAK_CLIENT_ID,
+        hasClientSecret: !!config2.KEYCLOAK_CLIENT_SECRET
+      });
+      const tokenRequestData = {
+        client_id: config2.KEYCLOAK_CLIENT_ID,
+        client_secret: config2.KEYCLOAK_CLIENT_SECRET,
+        username: email,
+        password,
+        grant_type: "password",
+        scope: config2.KEYCLOAK_SCOPE || "openid email profile"
+        // Required for userinfo endpoint access
+      };
+      strapi.log.debug("🔍 Token request (password hidden):", {
+        client_id: tokenRequestData.client_id,
+        username: tokenRequestData.username,
+        grant_type: tokenRequestData.grant_type,
+        scope: tokenRequestData.scope,
+        hasClientSecret: !!tokenRequestData.client_secret,
+        hasPassword: !!tokenRequestData.password
+      });
       const tokenResponse = await axios.post(
-        `${config2.KEYCLOAK_AUTH_URL}${config2.KEYCLOAK_TOKEN_URL}`,
-        new URLSearchParams({
-          client_id: config2.KEYCLOAK_CLIENT_ID,
-          client_secret: config2.KEYCLOAK_CLIENT_SECRET,
-          username: email,
-          password,
-          grant_type: "password"
-        }).toString(),
+        tokenUrl,
+        new URLSearchParams(tokenRequestData).toString(),
         { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
       );
       const access_token = tokenResponse.data.access_token;
       strapi.log.info(`✅ ${email} successfully authenticated via Keycloak.`);
+      strapi.log.debug("🔍 Keycloak token response:", {
+        hasAccessToken: !!access_token,
+        tokenType: tokenResponse.data.token_type,
+        expiresIn: tokenResponse.data.expires_in,
+        hasRefreshToken: !!tokenResponse.data.refresh_token,
+        scope: tokenResponse.data.scope,
+        accessTokenPreview: access_token ? `${access_token.substring(0, 20)}...` : "none"
+      });
+      let userInfoUrl;
+      if (config2.KEYCLOAK_USERINFO_URL) {
+        userInfoUrl = config2.KEYCLOAK_USERINFO_URL.startsWith("http") ? config2.KEYCLOAK_USERINFO_URL : `${config2.KEYCLOAK_AUTH_URL}${config2.KEYCLOAK_USERINFO_URL}`;
+      } else {
+        userInfoUrl = `${config2.KEYCLOAK_AUTH_URL}/realms/${config2.KEYCLOAK_REALM}/protocol/openid-connect/userinfo`;
+      }
+      strapi.log.debug("🔍 Keycloak userinfo endpoint:", userInfoUrl);
+      strapi.log.debug("🔍 Requesting userinfo with token:", {
+        url: userInfoUrl,
+        hasAuthHeader: true,
+        tokenPreview: access_token ? `${access_token.substring(0, 20)}...` : "none"
+      });
       const userInfoResponse = await axios.get(
-        `${config2.KEYCLOAK_AUTH_URL}${config2.KEYCLOAK_USERINFO_URL}`,
+        userInfoUrl,
         { headers: { Authorization: `Bearer ${access_token}` } }
       );
       const userInfo = userInfoResponse.data;
+      strapi.log.debug("🔍 Keycloak user info:", {
+        email: userInfo.email,
+        sub: userInfo.sub,
+        preferred_username: userInfo.preferred_username,
+        given_name: userInfo.given_name,
+        family_name: userInfo.family_name
+      });
+      strapi.log.debug("🔍 Finding or creating admin user...");
       const adminUser = await strapi.service("plugin::strapi-keycloak-passport.adminUserService").findOrCreate(userInfo);
-      const jwt = await strapi.admin.services.token.createJwtToken(adminUser);
+      strapi.log.debug("🔍 Admin user result:", {
+        id: adminUser?.id,
+        email: adminUser?.email,
+        isActive: adminUser?.isActive,
+        hasRoles: !!adminUser?.roles,
+        roleCount: adminUser?.roles?.length
+      });
+      strapi.log.debug("🔍 Generating JWT token...");
+      const sessionManager = strapi.sessionManager;
+      if (!sessionManager) {
+        throw new Error("sessionManager is not supported. Please upgrade to Strapi v5.24.1 or later.");
+      }
+      const userId = String(adminUser.id);
+      const deviceId = crypto.randomUUID();
+      const rememberMe = !!config2.REMEMBER_ME;
+      const { token: refreshToken } = await sessionManager("admin").generateRefreshToken(userId, deviceId, {
+        type: rememberMe ? "refresh" : "session"
+      });
+      const cookieOptions = {};
+      ctx.cookies.set("strapi_admin_refresh", refreshToken, cookieOptions);
+      const accessResult = await sessionManager("admin").generateAccessToken(refreshToken);
+      if ("error" in accessResult) {
+        throw new Error(accessResult.error);
+      }
+      const { token: jwt } = accessResult;
+      strapi.log.debug("🔍 JWT generated:", { hasToken: !!jwt, tokenLength: jwt?.length });
       ctx.session = {
         ...ctx.session,
         user: adminUser
       };
+      strapi.log.debug("🔍 Session updated with user");
       return ctx.send({
         data: {
           token: jwt,
@@ -78,16 +158,28 @@ const authOverrideController = {
         }
       });
     } catch (error) {
+      const errorDetails = {
+        status: error.response?.status || error?.status,
+        name: error?.name,
+        message: error?.message,
+        url: error.config?.url,
+        method: error.config?.method,
+        responseData: error.response?.data,
+        code: error.code
+      };
       strapi.log.error(
-        `🔴 Authentication Failed for ${ctx.request.body?.email || "unknown user"}:`,
-        error.response?.data || error.message
+        `🔴 Authentication Failed for ${ctx.request.body?.email || "unknown user"}:`
       );
+      strapi.log.error("🔍 Error details:", errorDetails);
+      strapi.log.debug("🔍 Full error stack:", error.stack);
       return ctx.badRequest("Invalid credentials", {
         error: {
-          status: error?.status ?? 400,
-          name: error?.name ?? "ApplicationError",
-          message: error?.message ?? "Invalid credentials",
-          details: error?.details ?? {}
+          status: error.response?.status || error?.status || 400,
+          name: error?.name || "ApplicationError",
+          message: error?.message || "Invalid credentials",
+          details: {
+            error: errorDetails
+          }
         }
       });
     }
@@ -170,7 +262,23 @@ const authOverrideController = {
       const userInfo = userInfoResponse.data;
       strapi.log.info(`🔵 Authenticating ${userInfo.email} via Keycloak OAuth2...`);
       const adminUser = await strapi.service("plugin::strapi-keycloak-passport.adminUserService").findOrCreate(userInfo);
-      const jwt = await strapi.admin.services.token.createJwtToken(adminUser);
+      const sessionManager = strapi.sessionManager;
+      if (!sessionManager) {
+        throw new Error("sessionManager is not supported. Please upgrade to Strapi v5.24.1 or later.");
+      }
+      const userId = String(adminUser.id);
+      const deviceId = crypto.randomUUID();
+      const rememberMe = !!config2.REMEMBER_ME;
+      const { token: refreshToken } = await sessionManager("admin").generateRefreshToken(userId, deviceId, {
+        type: rememberMe ? "refresh" : "session"
+      });
+      const cookieOptions = {};
+      ctx.cookies.set("strapi_admin_refresh", refreshToken, cookieOptions);
+      const accessResult = await sessionManager("admin").generateAccessToken(refreshToken);
+      if ("error" in accessResult) {
+        throw new Error(accessResult.error);
+      }
+      const { token: jwt } = accessResult;
       strapi.log.info(`✅ ${userInfo.email} successfully authenticated via Keycloak OAuth2.`);
       if (ctx.session) {
         delete ctx.session.oauth2State;
@@ -198,7 +306,16 @@ const authOverrideController = {
     try {
       const config2 = strapi.config.get("plugin::strapi-keycloak-passport");
       const postLogoutRedirectUri = config2.KEYCLOAK_LOGOUT_REDIRECT_URI || `${ctx.request.origin}/admin/auth/login`;
-      const logoutUrl = new URL(`${config2.KEYCLOAK_AUTH_URL}/realms/${config2.KEYCLOAK_REALM}/protocol/openid-connect/logout`);
+      let logoutUrl;
+      if (config2.KEYCLOAK_LOGOUT_URL) {
+        if (config2.KEYCLOAK_LOGOUT_URL.startsWith("http")) {
+          logoutUrl = new URL(config2.KEYCLOAK_LOGOUT_URL);
+        } else {
+          logoutUrl = new URL(`${config2.KEYCLOAK_AUTH_URL}${config2.KEYCLOAK_LOGOUT_URL}`);
+        }
+      } else {
+        logoutUrl = new URL(`${config2.KEYCLOAK_AUTH_URL}/realms/${config2.KEYCLOAK_REALM}/protocol/openid-connect/logout`);
+      }
       logoutUrl.searchParams.set("client_id", config2.KEYCLOAK_CLIENT_ID);
       logoutUrl.searchParams.set("post_logout_redirect_uri", postLogoutRedirectUri);
       strapi.log.info("🔵 Generated Keycloak logout URL.");
@@ -206,6 +323,169 @@ const authOverrideController = {
     } catch (error) {
       strapi.log.error("🔴 Failed to generate logout URL:", error.message);
       return ctx.badRequest("Failed to generate logout URL");
+    }
+  },
+  /**
+   * Performs complete logout: destroys Strapi session, clears cookies, 
+   * revokes Keycloak tokens, and redirects to Keycloak logout.
+   * This overrides Strapi 5's default /admin/logout endpoint.
+   *
+   * @async
+   * @function logout
+   * @param {Object} ctx - Koa context.
+   * @returns {Promise<void>} Returns JSON response or redirects to Keycloak logout.
+   */
+  async logout(ctx) {
+    try {
+      const config2 = strapi.config.get("plugin::strapi-keycloak-passport");
+      strapi.log.info("🔵 Initiating logout process...");
+      strapi.log.debug("🔍 Request method:", ctx.request.method);
+      strapi.log.debug("🔍 Request URL:", ctx.request.url);
+      strapi.log.debug("🔍 Accept header:", ctx.request.headers.accept);
+      const refreshToken = ctx.cookies.get("strapi_admin_refresh");
+      strapi.log.debug("🔍 Refresh token present:", !!refreshToken);
+      let sessionDestroyed = false;
+      if (refreshToken && strapi.sessionManager) {
+        try {
+          const sessionManager = strapi.sessionManager("admin");
+          await sessionManager.destroyRefreshToken(refreshToken);
+          strapi.log.info("✅ Strapi session destroyed via session manager");
+          sessionDestroyed = true;
+        } catch (error) {
+          strapi.log.warn("⚠️ Failed to destroy Strapi session:", error.message);
+          strapi.log.debug("🔍 Session destruction error:", error);
+        }
+      } else {
+        strapi.log.warn("⚠️ Cannot destroy session - missing refresh token or session manager");
+      }
+      ctx.cookies.set("strapi_admin_refresh", null, {
+        maxAge: 0,
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        path: "/",
+        sameSite: "lax"
+      });
+      strapi.log.info("✅ Session cookies cleared");
+      if (ctx.session) {
+        ctx.session = null;
+      }
+      let tokensRevoked = false;
+      if (refreshToken) {
+        try {
+          let revocationUrl;
+          if (config2.KEYCLOAK_TOKEN_URL) {
+            if (config2.KEYCLOAK_TOKEN_URL.startsWith("http")) {
+              const baseUrl = config2.KEYCLOAK_TOKEN_URL.split("/protocol/")[0];
+              revocationUrl = `${baseUrl}/protocol/openid-connect/revoke`;
+            } else {
+              const revokePath = config2.KEYCLOAK_TOKEN_URL.replace("/token", "/revoke");
+              revocationUrl = `${config2.KEYCLOAK_AUTH_URL}${revokePath}`;
+            }
+          } else {
+            revocationUrl = `${config2.KEYCLOAK_AUTH_URL}/realms/${config2.KEYCLOAK_REALM}/protocol/openid-connect/revoke`;
+          }
+          strapi.log.debug("🔍 Revoking token at:", revocationUrl);
+          const revocationResponse = await axios.post(
+            revocationUrl,
+            new URLSearchParams({
+              client_id: config2.KEYCLOAK_CLIENT_ID,
+              client_secret: config2.KEYCLOAK_CLIENT_SECRET,
+              token: refreshToken,
+              token_type_hint: "refresh_token"
+            }).toString(),
+            {
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              validateStatus: (status) => status < 500
+              // Accept 4xx responses
+            }
+          );
+          strapi.log.info("✅ Keycloak tokens revoked");
+          strapi.log.debug("🔍 Revocation response status:", revocationResponse.status);
+          tokensRevoked = true;
+        } catch (error) {
+          strapi.log.warn("⚠️ Failed to revoke Keycloak tokens:", error.message);
+          strapi.log.debug("🔍 Token revocation error:", error.response?.data || error);
+        }
+      }
+      const logoutCallbackUri = `${ctx.request.origin}/strapi-keycloak-passport/logout-callback`;
+      strapi.log.debug("🔍 Logout callback URI:", logoutCallbackUri);
+      let keycloakLogoutUrl;
+      if (config2.KEYCLOAK_LOGOUT_URL) {
+        if (config2.KEYCLOAK_LOGOUT_URL.startsWith("http")) {
+          keycloakLogoutUrl = new URL(config2.KEYCLOAK_LOGOUT_URL);
+        } else {
+          keycloakLogoutUrl = new URL(`${config2.KEYCLOAK_AUTH_URL}${config2.KEYCLOAK_LOGOUT_URL}`);
+        }
+      } else {
+        keycloakLogoutUrl = new URL(`${config2.KEYCLOAK_AUTH_URL}/realms/${config2.KEYCLOAK_REALM}/protocol/openid-connect/logout`);
+      }
+      keycloakLogoutUrl.searchParams.set("client_id", config2.KEYCLOAK_CLIENT_ID);
+      keycloakLogoutUrl.searchParams.set("post_logout_redirect_uri", logoutCallbackUri);
+      strapi.log.info("✅ Logout completed, initiating Keycloak logout");
+      strapi.log.debug("🔍 Keycloak logout URL:", keycloakLogoutUrl.toString());
+      const expectsJson = ctx.request.headers.accept?.includes("application/json");
+      if (expectsJson) {
+        strapi.log.debug("🔍 Returning JSON response with logout URL");
+        return ctx.send({
+          data: {
+            logoutUrl: keycloakLogoutUrl.toString(),
+            sessionDestroyed,
+            tokensRevoked
+          }
+        });
+      } else {
+        strapi.log.debug("🔍 Redirecting to Keycloak logout");
+        return ctx.redirect(keycloakLogoutUrl.toString());
+      }
+    } catch (error) {
+      strapi.log.error("🔴 Logout failed:", error.message);
+      strapi.log.debug("🔍 Full error:", error.stack);
+      try {
+        ctx.cookies.set("strapi_admin_refresh", null, {
+          maxAge: 0,
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          path: "/"
+        });
+      } catch (cookieError) {
+        strapi.log.debug("🔍 Failed to clear cookies:", cookieError.message);
+      }
+      const expectsJson = ctx.request.headers.accept?.includes("application/json");
+      if (expectsJson) {
+        return ctx.send({
+          data: {
+            logoutUrl: "/admin/auth/login",
+            sessionDestroyed: false,
+            tokensRevoked: false,
+            error: error.message
+          }
+        });
+      } else {
+        const redirectUri = config?.KEYCLOAK_LOGOUT_REDIRECT_URI || "/admin/auth/login";
+        return ctx.redirect(redirectUri);
+      }
+    }
+  },
+  /**
+   * Handles the callback after Keycloak logout completes.
+   * This is where Keycloak redirects after terminating the SSO session.
+   *
+   * @async
+   * @function logoutCallback
+   * @param {Object} ctx - Koa context.
+   * @returns {Promise<void>} Redirects to final logout destination.
+   */
+  async logoutCallback(ctx) {
+    try {
+      const config2 = strapi.config.get("plugin::strapi-keycloak-passport");
+      strapi.log.info("🔵 Logout callback received from Keycloak");
+      strapi.log.debug("🔍 Query params:", ctx.query);
+      const finalRedirectUri = config2.KEYCLOAK_LOGOUT_REDIRECT_URI || "/admin/auth/login";
+      strapi.log.info("✅ Logout flow completed, redirecting to:", finalRedirectUri);
+      return ctx.redirect(finalRedirectUri);
+    } catch (error) {
+      strapi.log.error("🔴 Logout callback failed:", error.message);
+      return ctx.redirect("/admin/auth/login");
     }
   },
   /**
@@ -326,21 +606,40 @@ const destroy = ({ strapi: strapi2 }) => {
 const register = ({ strapi: strapi2 }) => {
   strapi2.log.info("🔄 Registering Strapi Keycloak Passport Plugin...");
 };
-const config = {
-  default: {
+const config$1 = {
+  default: ({ env }) => ({
     KEYCLOAK_AUTH_URL: "",
     KEYCLOAK_REALM: "",
     KEYCLOAK_CLIENT_ID: "",
     KEYCLOAK_CLIENT_SECRET: "",
     KEYCLOAK_TOKEN_URL: "",
     KEYCLOAK_USERINFO_URL: "",
+    KEYCLOAK_LOGOUT_URL: "",
     KEYCLOAK_REDIRECT_URI: "",
     KEYCLOAK_LOGOUT_REDIRECT_URI: "",
+    KEYCLOAK_SCOPE: "openid email profile",
+    REMEMBER_ME: false,
     roleConfigs: {
-      defaultRoleId: 5,
-      excludedRoles: []
+      defaultRoleId: env.int("KEYCLOAK_PASSPORT_DEFAULT_ROLE_ID", 3),
+      superAdmin: {
+        roleId: env.int("KEYCLOAK_PASSPORT_SUPER_ADMIN_ROLE_ID", 1),
+        keycloakRole: env("KEYCLOAK_PASSPORT_SUPER_ADMIN_KEYCLOAK_ROLE", "STRAPI_ADMIN")
+      },
+      editor: {
+        roleId: env.int("KEYCLOAK_PASSPORT_ADMIN_ROLE_ID", 2),
+        keycloakRole: env("KEYCLOAK_PASSPORT_ADMIN_KEYCLOAK_ROLE", "editor")
+      },
+      author: {
+        roleId: env.int("KEYCLOAK_PASSPORT_USER_ROLE_ID", 3),
+        keycloakRole: env("KEYCLOAK_PASSPORT_USER_KEYCLOAK_ROLE", "author")
+      },
+      excludedRoles: env.array("KEYCLOAK_PASSPORT_EXCLUDED_ROLES", [
+        "uma_authorization",
+        "default-roles-NCR",
+        "offline_access"
+      ])
     }
-  },
+  }),
   validator(config2) {
     if (!config2.KEYCLOAK_AUTH_URL) {
       throw new Error("Missing KEYCLOAK_AUTH_URL in plugin config.");
@@ -505,6 +804,16 @@ const routes = [
       // No auth required for login
     }
   },
+  // ✅ Override Admin Logout to handle both Strapi and Keycloak logout
+  {
+    method: "POST",
+    path: "/admin/logout",
+    handler: "authOverrideController.logout",
+    config: {
+      auth: false
+      // Allow logout even if token is invalid/expired
+    }
+  },
   // ✅ OAuth2 Authorization Code Flow - Initiate (Keycloak 18+)
   {
     method: "GET",
@@ -543,6 +852,16 @@ const routes = [
     config: {
       auth: false
       // No auth required to get logout URL
+    }
+  },
+  // ✅ Logout Callback - Receives redirect from Keycloak after logout
+  {
+    method: "GET",
+    path: "/logout-callback",
+    handler: "authOverrideController.logoutCallback",
+    config: {
+      auth: false
+      // No auth required for logout callback
     }
   },
   // ✅ Get Keycloak Roles (Admin Permission Required)
@@ -602,26 +921,62 @@ const adminUserService = ({ strapi: strapi2 }) => ({
       const firstname = userInfo.given_name || "";
       const lastname = userInfo.family_name || "";
       const keycloakUserId = userInfo.sub;
-      const [adminUser] = await strapi2.entityService.findMany("admin::user", {
+      strapi2.log.debug("🔍 User info for findOrCreate:", {
+        email,
+        username,
+        firstname,
+        lastname,
+        keycloakUserId
+      });
+      let [adminUser] = await strapi2.entityService.findMany("admin::user", {
         filters: { email },
         populate: { roles: true },
         limit: 1
       });
-      const roleMappings = await strapi2.service("plugin::strapi-keycloak-passport.roleMappingService").getMappings();
-      const DEFAULT_ROLE_ID = strapi2.config.get("plugin::strapi-keycloak-passport").roleConfigs.defaultRoleId;
+      strapi2.log.debug("🔍 Existing admin user found:", {
+        exists: !!adminUser,
+        id: adminUser?.id,
+        currentRoles: adminUser?.roles
+      });
+      const config2 = strapi2.config.get("plugin::strapi-keycloak-passport");
+      const roleConfigs = config2.roleConfigs;
+      const DEFAULT_ROLE_ID = roleConfigs.defaultRoleId;
       let appliedRoles = /* @__PURE__ */ new Set();
       try {
+        strapi2.log.debug("🔍 Fetching Keycloak roles for user:", keycloakUserId);
         const keycloakRoles = await fetchKeycloakUserRoles(keycloakUserId, strapi2);
-        keycloakRoles.forEach((role) => {
-          const mappedRole = roleMappings.find((mapped) => mapped.keycloakRole === role);
-          if (mappedRole) appliedRoles.add(mappedRole.strapiRole);
+        strapi2.log.debug("🔍 Keycloak roles received:", keycloakRoles);
+        strapi2.log.debug("🔍 Role configurations:", roleConfigs);
+        const excludedRoles = roleConfigs.excludedRoles || [];
+        const filteredRoles = keycloakRoles.filter((role) => !excludedRoles.includes(role));
+        strapi2.log.debug("🔍 Filtered roles (excluded removed):", filteredRoles);
+        filteredRoles.forEach((keycloakRole) => {
+          for (const [configKey, roleMapping2] of Object.entries(roleConfigs)) {
+            if (configKey === "defaultRoleId" || configKey === "excludedRoles") continue;
+            if (roleMapping2.keycloakRole === keycloakRole) {
+              appliedRoles.add(roleMapping2.roleId);
+              strapi2.log.debug(`🔍 Mapped ${keycloakRole} -> Strapi role ${roleMapping2.roleId} (${configKey})`);
+              break;
+            }
+          }
         });
+        if (appliedRoles.size === 0) {
+          strapi2.log.debug("🔍 No matching role mappings found, will use default role");
+        }
       } catch (error) {
         strapi2.log.error("❌ Failed to fetch user roles from Keycloak:", error.response?.data || error.message);
       }
       const userRoles = appliedRoles.size ? Array.from(appliedRoles) : [DEFAULT_ROLE_ID];
+      strapi2.log.debug("🔍 Final user roles:", { roles: userRoles, usingDefault: appliedRoles.size === 0 });
       if (!adminUser) {
-        await strapi2.entityService.create("admin::user", {
+        strapi2.log.debug("🔍 Creating new admin user with data:", {
+          email,
+          firstname,
+          lastname,
+          username,
+          roles: userRoles
+        });
+        adminUser = await strapi2.entityService.create("admin::user", {
           data: {
             email,
             firstname,
@@ -631,9 +986,15 @@ const adminUserService = ({ strapi: strapi2 }) => ({
             roles: userRoles
           }
         });
-      }
-      if (JSON.stringify(adminUser.roles) !== JSON.stringify(userRoles)) {
-        await strapi2.documents("admin::user").update({
+        strapi2.log.info(`✅ Created new admin user: ${email}`);
+        strapi2.log.debug("🔍 Created user result:", adminUser);
+      } else if (JSON.stringify(adminUser.roles) !== JSON.stringify(userRoles)) {
+        strapi2.log.debug("🔍 Updating user roles:", {
+          documentId: adminUser.documentId,
+          oldRoles: adminUser.roles,
+          newRoles: userRoles
+        });
+        adminUser = await strapi2.documents("admin::user").update({
           documentId: adminUser.documentId,
           data: {
             firstname,
@@ -641,7 +1002,16 @@ const adminUserService = ({ strapi: strapi2 }) => ({
             roles: userRoles
           }
         });
+        strapi2.log.info(`✅ Updated admin user roles: ${email}`);
+        strapi2.log.debug("🔍 Updated user result:", adminUser);
+      } else {
+        strapi2.log.debug("🔍 User exists and roles unchanged, no update needed");
       }
+      strapi2.log.debug("🔍 Returning admin user:", {
+        id: adminUser?.id,
+        email: adminUser?.email,
+        roles: adminUser?.roles
+      });
       return adminUser;
     } catch (error) {
       strapi2.log.error("❌ Failed to create/update user:", error.message);
@@ -653,12 +1023,24 @@ async function fetchKeycloakUserRoles(keycloakUserId, strapi2) {
   if (!keycloakUserId) throw new Error("❌ Keycloak user ID is missing!");
   const config2 = strapi2.config.get("plugin::strapi-keycloak-passport");
   try {
+    strapi2.log.debug("🔍 Fetching Keycloak admin token for role retrieval...");
     const accessToken = await strapi2.plugin("strapi-keycloak-passport").service("keycloakService").fetchAdminToken();
+    strapi2.log.debug("🔍 Admin token retrieved for roles API");
+    let rolesApiUrl;
+    if (config2.KEYCLOAK_AUTH_URL.includes("/realms/")) {
+      const baseUrl = config2.KEYCLOAK_AUTH_URL.split("/realms/")[0];
+      rolesApiUrl = `${baseUrl}/admin/realms/${config2.KEYCLOAK_REALM}/users/${keycloakUserId}/role-mappings/realm`;
+    } else {
+      rolesApiUrl = `${config2.KEYCLOAK_AUTH_URL}/admin/realms/${config2.KEYCLOAK_REALM}/users/${keycloakUserId}/role-mappings/realm`;
+    }
+    strapi2.log.debug("🔍 Fetching user roles from:", rolesApiUrl);
     const rolesResponse = await axios.get(
-      `${config2.KEYCLOAK_AUTH_URL}/auth/admin/realms/${config2.KEYCLOAK_REALM}/users/${keycloakUserId}/role-mappings/realm`,
+      rolesApiUrl,
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
-    return rolesResponse.data.map((role) => role.name);
+    const roleNames = rolesResponse.data.map((role) => role.name);
+    strapi2.log.debug("🔍 User roles from Keycloak:", roleNames);
+    return roleNames;
   } catch (error) {
     strapi2.log.error("❌ Failed to fetch Keycloak user roles:", error.response?.data || error.message);
     throw new Error("Failed to fetch Keycloak user roles.");
@@ -722,12 +1104,20 @@ const keycloakService = ({ strapi: strapi2 }) => ({
   async fetchAdminToken() {
     const config2 = strapi2.config.get("plugin::strapi-keycloak-passport");
     try {
+      let tokenUrl;
+      if (config2.KEYCLOAK_TOKEN_URL) {
+        tokenUrl = config2.KEYCLOAK_TOKEN_URL.startsWith("http") ? config2.KEYCLOAK_TOKEN_URL : `${config2.KEYCLOAK_AUTH_URL}${config2.KEYCLOAK_TOKEN_URL}`;
+      } else {
+        tokenUrl = `${config2.KEYCLOAK_AUTH_URL}/realms/${config2.KEYCLOAK_REALM}/protocol/openid-connect/token`;
+      }
+      strapi2.log.debug("🔍 Fetching admin token from:", tokenUrl);
       const tokenResponse = await axios.post(
-        `${config2.KEYCLOAK_AUTH_URL}/auth/realms/${config2.KEYCLOAK_REALM}/protocol/openid-connect/token`,
+        tokenUrl,
         new URLSearchParams({
           client_id: config2.KEYCLOAK_CLIENT_ID,
           client_secret: config2.KEYCLOAK_CLIENT_SECRET,
-          grant_type: "client_credentials"
+          grant_type: "client_credentials",
+          scope: config2.KEYCLOAK_SCOPE || "openid email profile"
         }).toString(),
         { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
       );
@@ -740,7 +1130,11 @@ const keycloakService = ({ strapi: strapi2 }) => ({
     } catch (error) {
       strapi2.log.error("❌ Keycloak Admin Token Fetch Error:", {
         status: error.response?.status || "Unknown",
-        message: error.response?.data || error.message
+        statusText: error.response?.statusText,
+        url: error.config?.url,
+        message: error.response?.data || error.message,
+        hasClientSecret: !!config2.KEYCLOAK_CLIENT_SECRET,
+        clientId: config2.KEYCLOAK_CLIENT_ID
       });
       throw new Error("Failed to fetch Keycloak admin token");
     }
@@ -755,7 +1149,7 @@ const index = {
   bootstrap,
   destroy,
   register,
-  config,
+  config: config$1,
   controllers,
   contentTypes,
   middlewares,

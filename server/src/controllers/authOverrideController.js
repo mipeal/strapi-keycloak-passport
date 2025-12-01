@@ -60,55 +60,158 @@ export default {
       /** @type {string} */
       const password = ctx.request.body?.password;
 
+      strapi.log.debug('🔍 Login request body:', { email, hasPassword: !!password });
+
       if (!email || !password) {
+        strapi.log.warn('⚠️ Missing email or password in login request');
         return ctx.badRequest('Missing email or password');
       }
 
       /** @type {Object} */
       const config = strapi.config.get('plugin::strapi-keycloak-passport');
       strapi.log.info(`🔵 Authenticating ${email} via Keycloak Passport...`);
+      
+      // Construct the token URL - support both full URLs and path-based config
+      let tokenUrl;
+      if (config.KEYCLOAK_TOKEN_URL) {
+        // If KEYCLOAK_TOKEN_URL is a full URL (starts with http), use it directly
+        tokenUrl = config.KEYCLOAK_TOKEN_URL.startsWith('http') 
+          ? config.KEYCLOAK_TOKEN_URL
+          : `${config.KEYCLOAK_AUTH_URL}${config.KEYCLOAK_TOKEN_URL}`;
+      } else {
+        // Fallback: construct from base URL and realm
+        tokenUrl = `${config.KEYCLOAK_AUTH_URL}/realms/${config.KEYCLOAK_REALM}/protocol/openid-connect/token`;
+      }
+      
+      strapi.log.debug('🔍 Keycloak token endpoint:', tokenUrl);
+      strapi.log.debug('🔍 Keycloak config:', {
+        authUrl: config.KEYCLOAK_AUTH_URL,
+        realm: config.KEYCLOAK_REALM,
+        clientId: config.KEYCLOAK_CLIENT_ID,
+        hasClientSecret: !!config.KEYCLOAK_CLIENT_SECRET,
+      });
 
       // 🔑 Authenticate with Keycloak
+      const tokenRequestData = {
+        client_id: config.KEYCLOAK_CLIENT_ID,
+        client_secret: config.KEYCLOAK_CLIENT_SECRET,
+        username: email,
+        password,
+        grant_type: 'password',
+        scope: config.KEYCLOAK_SCOPE || 'openid email profile', // Required for userinfo endpoint access
+      };
+      strapi.log.debug('🔍 Token request (password hidden):', {
+        client_id: tokenRequestData.client_id,
+        username: tokenRequestData.username,
+        grant_type: tokenRequestData.grant_type,
+        scope: tokenRequestData.scope,
+        hasClientSecret: !!tokenRequestData.client_secret,
+        hasPassword: !!tokenRequestData.password,
+      });
+      
       const tokenResponse = await axios.post(
-        `${config.KEYCLOAK_AUTH_URL}${config.KEYCLOAK_TOKEN_URL}`,
-        new URLSearchParams({
-          client_id: config.KEYCLOAK_CLIENT_ID,
-          client_secret: config.KEYCLOAK_CLIENT_SECRET,
-          username: email,
-          password,
-          grant_type: 'password',
-        }).toString(),
+        tokenUrl,
+        new URLSearchParams(tokenRequestData).toString(),
         { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
       );
 
       /** @type {string} */
       const access_token = tokenResponse.data.access_token;
       strapi.log.info(`✅ ${email} successfully authenticated via Keycloak.`);
+      strapi.log.debug('🔍 Keycloak token response:', {
+        hasAccessToken: !!access_token,
+        tokenType: tokenResponse.data.token_type,
+        expiresIn: tokenResponse.data.expires_in,
+        hasRefreshToken: !!tokenResponse.data.refresh_token,
+        scope: tokenResponse.data.scope,
+        accessTokenPreview: access_token ? `${access_token.substring(0, 20)}...` : 'none',
+      });
 
       // 🔍 Fetch user details from Keycloak
+      let userInfoUrl;
+      if (config.KEYCLOAK_USERINFO_URL) {
+        // If KEYCLOAK_USERINFO_URL is a full URL (starts with http), use it directly
+        userInfoUrl = config.KEYCLOAK_USERINFO_URL.startsWith('http')
+          ? config.KEYCLOAK_USERINFO_URL
+          : `${config.KEYCLOAK_AUTH_URL}${config.KEYCLOAK_USERINFO_URL}`;
+      } else {
+        // Fallback: construct from base URL and realm
+        userInfoUrl = `${config.KEYCLOAK_AUTH_URL}/realms/${config.KEYCLOAK_REALM}/protocol/openid-connect/userinfo`;
+      }
+      
+      strapi.log.debug('🔍 Keycloak userinfo endpoint:', userInfoUrl);
+      strapi.log.debug('🔍 Requesting userinfo with token:', {
+        url: userInfoUrl,
+        hasAuthHeader: true,
+        tokenPreview: access_token ? `${access_token.substring(0, 20)}...` : 'none',
+      });
+      
       const userInfoResponse = await axios.get(
-        `${config.KEYCLOAK_AUTH_URL}${config.KEYCLOAK_USERINFO_URL}`,
+        userInfoUrl,
         { headers: { Authorization: `Bearer ${access_token}` } }
       );
 
       /** @type {Object} */
       const userInfo = userInfoResponse.data;
+      strapi.log.debug('🔍 Keycloak user info:', {
+        email: userInfo.email,
+        sub: userInfo.sub,
+        preferred_username: userInfo.preferred_username,
+        given_name: userInfo.given_name,
+        family_name: userInfo.family_name,
+      });
 
       // 🔄 Find or create Strapi admin user
+      strapi.log.debug('🔍 Finding or creating admin user...');
       /** @type {Object} */
       const adminUser = await strapi
         .service('plugin::strapi-keycloak-passport.adminUserService')
         .findOrCreate(userInfo);
+      
+      strapi.log.debug('🔍 Admin user result:', {
+        id: adminUser?.id,
+        email: adminUser?.email,
+        isActive: adminUser?.isActive,
+        hasRoles: !!adminUser?.roles,
+        roleCount: adminUser?.roles?.length,
+      });
 
-      // 🔥 Generate Strapi JWT
-      /** @type {string} */
-      const jwt = await strapi.admin.services.token.createJwtToken(adminUser);
+      // 🔥 Generate Strapi JWT using session manager (Strapi 5)
+      strapi.log.debug('🔍 Generating JWT token...');
+      
+      const sessionManager = strapi.sessionManager;
+      if (!sessionManager) {
+        throw new Error('sessionManager is not supported. Please upgrade to Strapi v5.24.1 or later.');
+      }
+      
+      const userId = String(adminUser.id);
+      const deviceId = crypto.randomUUID();
+      const rememberMe = !!config.REMEMBER_ME;
+      
+      // Generate refresh token
+      const {token: refreshToken} = await sessionManager('admin').generateRefreshToken(userId, deviceId, {
+        type: rememberMe ? 'refresh' : 'session',
+      });
+      
+      // Set refresh token in cookie
+      const cookieOptions = {};
+      ctx.cookies.set('strapi_admin_refresh', refreshToken, cookieOptions);
+      
+      // Generate access token
+      const accessResult = await sessionManager('admin').generateAccessToken(refreshToken);
+      if ('error' in accessResult) {
+        throw new Error(accessResult.error);
+      }
+      const {token: jwt} = accessResult;
+      
+      strapi.log.debug('🔍 JWT generated:', { hasToken: !!jwt, tokenLength: jwt?.length });
 
       // ✅ Store authenticated user in `ctx.state.user`
       ctx.session = {
         ...ctx.session,
         user: adminUser
       };
+      strapi.log.debug('🔍 Session updated with user');
 
       return ctx.send({
         data: {
@@ -127,17 +230,30 @@ export default {
         },
       });
     } catch (error) {
+      const errorDetails = {
+        status: error.response?.status || error?.status,
+        name: error?.name,
+        message: error?.message,
+        url: error.config?.url,
+        method: error.config?.method,
+        responseData: error.response?.data,
+        code: error.code,
+      };
+      
       strapi.log.error(
         `🔴 Authentication Failed for ${ctx.request.body?.email || 'unknown user'}:`,
-        error.response?.data || error.message
       );
+      strapi.log.error('🔍 Error details:', errorDetails);
+      strapi.log.debug('🔍 Full error stack:', error.stack);
 
       return ctx.badRequest('Invalid credentials', {
         error: {
-          status: error?.status ?? 400,
-          name: error?.name ?? 'ApplicationError',
-          message: error?.message ?? 'Invalid credentials',
-          details: error?.details ?? {},
+          status: error.response?.status || error?.status || 400,
+          name: error?.name || 'ApplicationError',
+          message: error?.message || 'Invalid credentials',
+          details: {
+            error: errorDetails
+          },
         },
       });
     }
@@ -256,9 +372,31 @@ export default {
         .service('plugin::strapi-keycloak-passport.adminUserService')
         .findOrCreate(userInfo);
 
-      // Generate Strapi JWT
-      /** @type {string} */
-      const jwt = await strapi.admin.services.token.createJwtToken(adminUser);
+      // Generate Strapi JWT using session manager (Strapi 5)
+      const sessionManager = strapi.sessionManager;
+      if (!sessionManager) {
+        throw new Error('sessionManager is not supported. Please upgrade to Strapi v5.24.1 or later.');
+      }
+      
+      const userId = String(adminUser.id);
+      const deviceId = crypto.randomUUID();
+      const rememberMe = !!config.REMEMBER_ME;
+      
+      // Generate refresh token
+      const {token: refreshToken} = await sessionManager('admin').generateRefreshToken(userId, deviceId, {
+        type: rememberMe ? 'refresh' : 'session',
+      });
+      
+      // Set refresh token in cookie
+      const cookieOptions = {};
+      ctx.cookies.set('strapi_admin_refresh', refreshToken, cookieOptions);
+      
+      // Generate access token
+      const accessResult = await sessionManager('admin').generateAccessToken(refreshToken);
+      if ('error' in accessResult) {
+        throw new Error(accessResult.error);
+      }
+      const {token: jwt} = accessResult;
 
       strapi.log.info(`✅ ${userInfo.email} successfully authenticated via Keycloak OAuth2.`);
 
@@ -298,8 +436,21 @@ export default {
       /** @type {string} */
       const postLogoutRedirectUri = config.KEYCLOAK_LOGOUT_REDIRECT_URI || `${ctx.request.origin}/admin/auth/login`;
 
-      // Build the Keycloak logout URL
-      const logoutUrl = new URL(`${config.KEYCLOAK_AUTH_URL}/realms/${config.KEYCLOAK_REALM}/protocol/openid-connect/logout`);
+      // Build the Keycloak logout URL - support both full URLs and path-based config
+      let logoutUrl;
+      if (config.KEYCLOAK_LOGOUT_URL) {
+        // If KEYCLOAK_LOGOUT_URL is a full URL (starts with http), use it directly
+        if (config.KEYCLOAK_LOGOUT_URL.startsWith('http')) {
+          logoutUrl = new URL(config.KEYCLOAK_LOGOUT_URL);
+        } else {
+          // Path-based: concatenate with base URL
+          logoutUrl = new URL(`${config.KEYCLOAK_AUTH_URL}${config.KEYCLOAK_LOGOUT_URL}`);
+        }
+      } else {
+        // Fallback: construct from base URL and realm
+        logoutUrl = new URL(`${config.KEYCLOAK_AUTH_URL}/realms/${config.KEYCLOAK_REALM}/protocol/openid-connect/logout`);
+      }
+      
       logoutUrl.searchParams.set('client_id', config.KEYCLOAK_CLIENT_ID);
       logoutUrl.searchParams.set('post_logout_redirect_uri', postLogoutRedirectUri);
 
@@ -308,6 +459,210 @@ export default {
     } catch (error) {
       strapi.log.error('🔴 Failed to generate logout URL:', error.message);
       return ctx.badRequest('Failed to generate logout URL');
+    }
+  },
+
+  /**
+   * Performs complete logout: destroys Strapi session, clears cookies, 
+   * revokes Keycloak tokens, and redirects to Keycloak logout.
+   * This overrides Strapi 5's default /admin/logout endpoint.
+   *
+   * @async
+   * @function logout
+   * @param {Object} ctx - Koa context.
+   * @returns {Promise<void>} Returns JSON response or redirects to Keycloak logout.
+   */
+  async logout(ctx) {
+    try {
+      /** @type {Object} */
+      const config = strapi.config.get('plugin::strapi-keycloak-passport');
+
+      strapi.log.info('🔵 Initiating logout process...');
+      strapi.log.debug('🔍 Request method:', ctx.request.method);
+      strapi.log.debug('🔍 Request URL:', ctx.request.url);
+      strapi.log.debug('🔍 Accept header:', ctx.request.headers.accept);
+
+      // 1. Get refresh token from cookie for revocation
+      const refreshToken = ctx.cookies.get('strapi_admin_refresh');
+      strapi.log.debug('🔍 Refresh token present:', !!refreshToken);
+      
+      // 2. Destroy Strapi session using session manager
+      let sessionDestroyed = false;
+      if (refreshToken && strapi.sessionManager) {
+        try {
+          const sessionManager = strapi.sessionManager('admin');
+          await sessionManager.destroyRefreshToken(refreshToken);
+          strapi.log.info('✅ Strapi session destroyed via session manager');
+          sessionDestroyed = true;
+        } catch (error) {
+          strapi.log.warn('⚠️ Failed to destroy Strapi session:', error.message);
+          strapi.log.debug('🔍 Session destruction error:', error);
+        }
+      } else {
+        strapi.log.warn('⚠️ Cannot destroy session - missing refresh token or session manager');
+      }
+
+      // 3. Clear session cookies
+      ctx.cookies.set('strapi_admin_refresh', null, {
+        maxAge: 0,
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        path: '/',
+        sameSite: 'lax',
+      });
+      strapi.log.info('✅ Session cookies cleared');
+
+      // 4. Clear ctx.session
+      if (ctx.session) {
+        ctx.session = null;
+      }
+
+      // 5. Revoke Keycloak tokens if refresh token exists
+      let tokensRevoked = false;
+      if (refreshToken) {
+        try {
+          // Construct revocation endpoint URL
+          let revocationUrl;
+          if (config.KEYCLOAK_TOKEN_URL) {
+            if (config.KEYCLOAK_TOKEN_URL.startsWith('http')) {
+              // Full URL: extract base and construct revoke endpoint
+              const baseUrl = config.KEYCLOAK_TOKEN_URL.split('/protocol/')[0];
+              revocationUrl = `${baseUrl}/protocol/openid-connect/revoke`;
+            } else {
+              // Path-based: replace token with revoke
+              const revokePath = config.KEYCLOAK_TOKEN_URL.replace('/token', '/revoke');
+              revocationUrl = `${config.KEYCLOAK_AUTH_URL}${revokePath}`;
+            }
+          } else {
+            // Fallback: construct from base URL and realm
+            revocationUrl = `${config.KEYCLOAK_AUTH_URL}/realms/${config.KEYCLOAK_REALM}/protocol/openid-connect/revoke`;
+          }
+
+          strapi.log.debug('🔍 Revoking token at:', revocationUrl);
+          
+          const revocationResponse = await axios.post(
+            revocationUrl,
+            new URLSearchParams({
+              client_id: config.KEYCLOAK_CLIENT_ID,
+              client_secret: config.KEYCLOAK_CLIENT_SECRET,
+              token: refreshToken,
+              token_type_hint: 'refresh_token',
+            }).toString(),
+            { 
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              validateStatus: (status) => status < 500, // Accept 4xx responses
+            }
+          );
+          
+          strapi.log.info('✅ Keycloak tokens revoked');
+          strapi.log.debug('🔍 Revocation response status:', revocationResponse.status);
+          tokensRevoked = true;
+        } catch (error) {
+          strapi.log.warn('⚠️ Failed to revoke Keycloak tokens:', error.message);
+          strapi.log.debug('🔍 Token revocation error:', error.response?.data || error);
+          // Continue with logout even if revocation fails
+        }
+      }
+
+      // 6. Build Keycloak logout URL with callback
+      const logoutCallbackUri = `${ctx.request.origin}/strapi-keycloak-passport/logout-callback`;
+      strapi.log.debug('🔍 Logout callback URI:', logoutCallbackUri);
+
+      let keycloakLogoutUrl;
+      if (config.KEYCLOAK_LOGOUT_URL) {
+        if (config.KEYCLOAK_LOGOUT_URL.startsWith('http')) {
+          keycloakLogoutUrl = new URL(config.KEYCLOAK_LOGOUT_URL);
+        } else {
+          keycloakLogoutUrl = new URL(`${config.KEYCLOAK_AUTH_URL}${config.KEYCLOAK_LOGOUT_URL}`);
+        }
+      } else {
+        keycloakLogoutUrl = new URL(`${config.KEYCLOAK_AUTH_URL}/realms/${config.KEYCLOAK_REALM}/protocol/openid-connect/logout`);
+      }
+      
+      keycloakLogoutUrl.searchParams.set('client_id', config.KEYCLOAK_CLIENT_ID);
+      keycloakLogoutUrl.searchParams.set('post_logout_redirect_uri', logoutCallbackUri);
+
+      strapi.log.info('✅ Logout completed, initiating Keycloak logout');
+      strapi.log.debug('🔍 Keycloak logout URL:', keycloakLogoutUrl.toString());
+      
+      // 7. Check if request expects JSON (from admin panel) or redirect
+      const expectsJson = ctx.request.headers.accept?.includes('application/json');
+      
+      if (expectsJson) {
+        // Return JSON response with logout URL for admin panel to handle
+        strapi.log.debug('🔍 Returning JSON response with logout URL');
+        return ctx.send({
+          data: {
+            logoutUrl: keycloakLogoutUrl.toString(),
+            sessionDestroyed,
+            tokensRevoked,
+          },
+        });
+      } else {
+        // Direct redirect for non-JSON requests
+        strapi.log.debug('🔍 Redirecting to Keycloak logout');
+        return ctx.redirect(keycloakLogoutUrl.toString());
+      }
+    } catch (error) {
+      strapi.log.error('🔴 Logout failed:', error.message);
+      strapi.log.debug('🔍 Full error:', error.stack);
+      
+      // Even if logout fails, try to clear cookies and redirect
+      try {
+        ctx.cookies.set('strapi_admin_refresh', null, {
+          maxAge: 0,
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          path: '/',
+        });
+      } catch (cookieError) {
+        strapi.log.debug('🔍 Failed to clear cookies:', cookieError.message);
+      }
+      
+      // Check if expecting JSON response
+      const expectsJson = ctx.request.headers.accept?.includes('application/json');
+      if (expectsJson) {
+        return ctx.send({
+          data: {
+            logoutUrl: '/admin/auth/login',
+            sessionDestroyed: false,
+            tokensRevoked: false,
+            error: error.message,
+          },
+        });
+      } else {
+        const redirectUri = config?.KEYCLOAK_LOGOUT_REDIRECT_URI || '/admin/auth/login';
+        return ctx.redirect(redirectUri);
+      }
+    }
+  },
+
+  /**
+   * Handles the callback after Keycloak logout completes.
+   * This is where Keycloak redirects after terminating the SSO session.
+   *
+   * @async
+   * @function logoutCallback
+   * @param {Object} ctx - Koa context.
+   * @returns {Promise<void>} Redirects to final logout destination.
+   */
+  async logoutCallback(ctx) {
+    try {
+      /** @type {Object} */
+      const config = strapi.config.get('plugin::strapi-keycloak-passport');
+      
+      strapi.log.info('🔵 Logout callback received from Keycloak');
+      strapi.log.debug('🔍 Query params:', ctx.query);
+      
+      // Final redirect after Keycloak logout
+      const finalRedirectUri = config.KEYCLOAK_LOGOUT_REDIRECT_URI || '/admin/auth/login';
+      
+      strapi.log.info('✅ Logout flow completed, redirecting to:', finalRedirectUri);
+      return ctx.redirect(finalRedirectUri);
+    } catch (error) {
+      strapi.log.error('🔴 Logout callback failed:', error.message);
+      // Redirect to login even on error
+      return ctx.redirect('/admin/auth/login');
     }
   },
 

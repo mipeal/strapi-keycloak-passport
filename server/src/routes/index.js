@@ -16,6 +16,16 @@ const routes = [
     },
   },
 
+  // ✅ Override Admin Logout to handle both Strapi and Keycloak logout
+  {
+    method: 'POST',
+    path: '/admin/logout',
+    handler: 'authOverrideController.logout',
+    config: {
+      auth: false, // Allow logout even if token is invalid/expired
+    },
+  },
+
   // ✅ OAuth2 Authorization Code Flow - Initiate (Keycloak 18+)
   {
     method: 'GET',
@@ -53,6 +63,16 @@ const routes = [
     handler: 'authOverrideController.getLogoutUrl',
     config: {
       auth: false, // No auth required to get logout URL
+    },
+  },
+
+  // ✅ Logout Callback - Receives redirect from Keycloak after logout
+  {
+    method: 'GET',
+    path: '/logout-callback',
+    handler: 'authOverrideController.logoutCallback',
+    config: {
+      auth: false, // No auth required for logout callback
     },
   },
 
