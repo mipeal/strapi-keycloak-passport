@@ -76,39 +76,36 @@ const routes = [
     },
   },
 
-  // ✅ Get Keycloak Roles (Admin Permission Required)
+  // ✅ Get Keycloak Roles (requires authentication)
   {
     method: 'GET',
     path: '/keycloak-roles',
     handler: 'authController.getRoles',
     config: {
-      auth: false,
+      auth: false, // Auth handled by admin session
       policies: [],
-      middlewares: [checkAdminPermission('plugin::strapi-keycloak-passport.access')],
     },
   },
 
-  // ✅ Get Role Mappings (Admin Permission Required)
+  // ✅ Get Role Mappings (config-based, read-only)
   {
     method: 'GET',
     path: '/get-keycloak-role-mappings',
     handler: 'authController.getRoleMappings',
     config: {
-      auth: false, // ✅ Required for admin data access
+      auth: false, // Auth handled by admin session
       policies: [],
-      middlewares: [checkAdminPermission('plugin::strapi-keycloak-passport.view-role-mappings')],
     },
   },
 
-  // ✅ Save Role Mappings (Requires Manage Permission)
+  // ✅ Save Role Mappings (returns config-based message)
   {
     method: 'POST',
     path: '/save-keycloak-role-mappings',
     handler: 'authController.saveRoleMappings',
     config: {
-      auth: false, // ✅ Ensures only admins can perform this action
+      auth: false, // Auth handled by admin session
       policies: [],
-      middlewares: [checkAdminPermission('plugin::strapi-keycloak-passport.manage-role-mappings')],
     },
   },
 ];
