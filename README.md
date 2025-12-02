@@ -114,11 +114,7 @@ module.exports = ({ env }) => ({
           roleId: env.int('KEYCLOAK_PASSPORT_USER_ROLE_ID', 3),
           keycloakRole: env('KEYCLOAK_PASSPORT_USER_KEYCLOAK_ROLE', 'author'),
         },
-        excludedRoles: env.array('KEYCLOAK_PASSPORT_EXCLUDED_ROLES', [
-          'uma_authorization',
-          'default-roles-NCR',
-          'offline_access',
-        ]),
+        excludedRoles: ['uma_authorization', 'default-roles-ncr', 'offline_access'],
       },
     },
   },
@@ -202,8 +198,8 @@ KEYCLOAK_PASSPORT_SUPER_ADMIN_KEYCLOAK_ROLE=STRAPI_ADMIN
 KEYCLOAK_PASSPORT_ADMIN_KEYCLOAK_ROLE=editor
 KEYCLOAK_PASSPORT_USER_KEYCLOAK_ROLE=author
 
-# Excluded Roles (comma-separated)
-KEYCLOAK_PASSPORT_EXCLUDED_ROLES=uma_authorization,default-roles-NCR,offline_access
+# Excluded Roles (comma-separated - use lowercase for Keycloak default roles)
+KEYCLOAK_PASSPORT_EXCLUDED_ROLES=uma_authorization,default-roles-ncr,offline_access
 ```
 
 ---
@@ -537,8 +533,10 @@ Some Keycloak roles are system-level or irrelevant to Strapi. Add these to `excl
 **Common excluded roles:**
 - `uma_authorization` - Keycloak authorization service role
 - `offline_access` - OAuth2 offline access scope
-- `default-roles-{realm}` - Default realm roles (e.g., `default-roles-NCR`)
+- `default-roles-{realm}` - Default realm roles (e.g., `default-roles-ncr` - use lowercase)
 - Client-specific roles that shouldn't grant Strapi access
+
+**Important:** Keycloak default roles are typically lowercase (e.g., `default-roles-ncr`, not `default-roles-NCR`). If excluded roles aren't filtering properly, check the case sensitivity of your role names.
 
 ### ⚙️ Advanced Configuration
 
@@ -663,9 +661,40 @@ sequenceDiagram
 ### Role Management Endpoints
 
 | Method | Endpoint | Description | Auth Required |
-| `GET` | `/keycloak-roles` | Fetch available Keycloak roles | ✅ Yes |
-| `GET` | `/get-keycloak-role-mappings` | Get saved role mappings | ✅ Yes |
-| `POST` | `/save-keycloak-role-mappings` | Save new role mappings | ✅ Yes |
+|--------|---------|-------------|---------------|
+| `GET` | `/keycloak-roles` | Fetch available Keycloak roles (read-only view) | ✅ Yes |
+| `GET` | `/get-keycloak-role-mappings` | Get configured role mappings (read-only) | ✅ Yes |
+
+---
+
+## 🎨 Admin Panel
+
+The plugin adds a **Passport Role Mapping** page to the Strapi admin panel under **Settings** → **Passport Role Mapping**.
+
+### Role Mapping View (Read-Only)
+
+The admin panel displays a read-only view of your role mappings:
+
+**What it shows:**
+- ✅ All available Keycloak roles (excluding system roles)
+- ✅ Currently mapped Strapi roles for each Keycloak role
+- ✅ Role mappings configured via environment variables
+
+**Important:**
+- 📖 **Read-Only Display** - Role mappings cannot be edited through the UI
+- ⚙️ **Configuration-Based** - All role mappings are managed via `config/plugins.js` or environment variables
+- 🔄 **Auto-Updated** - The view reflects your current configuration on each page load
+
+**Why read-only?**
+Role mappings are infrastructure configuration that should be:
+- Version-controlled alongside your codebase
+- Consistent across environments (dev, staging, production)
+- Changed through your deployment process, not ad-hoc UI edits
+
+To modify role mappings:
+1. Update `config/plugins.js` or environment variables
+2. Redeploy your Strapi application
+3. Role mappings will be automatically applied on next login
 
 ---
 
