@@ -75,7 +75,15 @@ const adminUserService = ({ strapi }) => ({
         
         // Filter out excluded roles
         const excludedRoles = roleConfigs.excludedRoles || [];
-        const filteredRoles = keycloakRoles.filter(role => !excludedRoles.includes(role));
+        strapi.log.debug('🔍 Excluded roles configuration:', excludedRoles);
+        strapi.log.debug('🔍 Raw Keycloak roles before filtering:', keycloakRoles);
+        const filteredRoles = keycloakRoles.filter(role => {
+          const isExcluded = excludedRoles.includes(role);
+          if (isExcluded) {
+            strapi.log.debug(`🚫 Excluding role: ${role}`);
+          }
+          return !isExcluded;
+        });
         strapi.log.debug('🔍 Filtered roles (excluded removed):', filteredRoles);
 
         // Map Keycloak roles to Strapi role IDs

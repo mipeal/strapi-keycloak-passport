@@ -607,39 +607,45 @@ const register = ({ strapi: strapi2 }) => {
   strapi2.log.info("🔄 Registering Strapi Keycloak Passport Plugin...");
 };
 const config$1 = {
-  default: ({ env }) => ({
-    KEYCLOAK_AUTH_URL: "",
-    KEYCLOAK_REALM: "",
-    KEYCLOAK_CLIENT_ID: "",
-    KEYCLOAK_CLIENT_SECRET: "",
-    KEYCLOAK_TOKEN_URL: "",
-    KEYCLOAK_USERINFO_URL: "",
-    KEYCLOAK_LOGOUT_URL: "",
-    KEYCLOAK_REDIRECT_URI: "",
-    KEYCLOAK_LOGOUT_REDIRECT_URI: "",
-    KEYCLOAK_SCOPE: "openid email profile",
-    REMEMBER_ME: false,
-    roleConfigs: {
-      defaultRoleId: env.int("KEYCLOAK_PASSPORT_DEFAULT_ROLE_ID", 3),
-      superAdmin: {
-        roleId: env.int("KEYCLOAK_PASSPORT_SUPER_ADMIN_ROLE_ID", 1),
-        keycloakRole: env("KEYCLOAK_PASSPORT_SUPER_ADMIN_KEYCLOAK_ROLE", "STRAPI_ADMIN")
-      },
-      editor: {
-        roleId: env.int("KEYCLOAK_PASSPORT_ADMIN_ROLE_ID", 2),
-        keycloakRole: env("KEYCLOAK_PASSPORT_ADMIN_KEYCLOAK_ROLE", "editor")
-      },
-      author: {
-        roleId: env.int("KEYCLOAK_PASSPORT_USER_ROLE_ID", 3),
-        keycloakRole: env("KEYCLOAK_PASSPORT_USER_KEYCLOAK_ROLE", "author")
-      },
-      excludedRoles: env.array("KEYCLOAK_PASSPORT_EXCLUDED_ROLES", [
-        "uma_authorization",
-        "default-roles-NCR",
-        "offline_access"
-      ])
-    }
-  }),
+  default: ({ env }) => {
+    const excludedRolesRaw = env("KEYCLOAK_PASSPORT_EXCLUDED_ROLES");
+    const excludedRoles = excludedRolesRaw ? excludedRolesRaw.split(",").map((r) => r.trim()) : [
+      "uma_authorization",
+      "default-roles-ncr",
+      "offline_access"
+    ];
+    console.log("🔍 [CONFIG] Excluded roles from env:", excludedRolesRaw);
+    console.log("🔍 [CONFIG] Parsed excluded roles:", excludedRoles);
+    return {
+      KEYCLOAK_AUTH_URL: "",
+      KEYCLOAK_REALM: "",
+      KEYCLOAK_CLIENT_ID: "",
+      KEYCLOAK_CLIENT_SECRET: "",
+      KEYCLOAK_TOKEN_URL: "",
+      KEYCLOAK_USERINFO_URL: "",
+      KEYCLOAK_LOGOUT_URL: "",
+      KEYCLOAK_REDIRECT_URI: "",
+      KEYCLOAK_LOGOUT_REDIRECT_URI: "",
+      KEYCLOAK_SCOPE: "openid email profile",
+      REMEMBER_ME: false,
+      roleConfigs: {
+        defaultRoleId: env.int("KEYCLOAK_PASSPORT_DEFAULT_ROLE_ID", 3),
+        superAdmin: {
+          roleId: env.int("KEYCLOAK_PASSPORT_SUPER_ADMIN_ROLE_ID", 1),
+          keycloakRole: env("KEYCLOAK_PASSPORT_SUPER_ADMIN_KEYCLOAK_ROLE", "STRAPI_ADMIN")
+        },
+        editor: {
+          roleId: env.int("KEYCLOAK_PASSPORT_ADMIN_ROLE_ID", 2),
+          keycloakRole: env("KEYCLOAK_PASSPORT_ADMIN_KEYCLOAK_ROLE", "editor")
+        },
+        author: {
+          roleId: env.int("KEYCLOAK_PASSPORT_USER_ROLE_ID", 3),
+          keycloakRole: env("KEYCLOAK_PASSPORT_USER_KEYCLOAK_ROLE", "author")
+        },
+        excludedRoles
+      }
+    };
+  },
   validator(config2) {
     if (!config2.KEYCLOAK_AUTH_URL) {
       throw new Error("Missing KEYCLOAK_AUTH_URL in plugin config.");
@@ -716,9 +722,15 @@ const authController = {
       );
       strapi.log.debug("🔍 Fetched roles count:", rolesResponse.data.length);
       const excludedRoles = config2.roleConfigs?.excludedRoles || [];
-      const keycloakRoles = rolesResponse.data.filter(
-        (role) => !excludedRoles.includes(role.name)
-      );
+      strapi.log.debug("🔍 [getRoles] Excluded roles configuration:", excludedRoles);
+      strapi.log.debug("🔍 [getRoles] Raw role objects from Keycloak:", rolesResponse.data.map((r) => ({ name: r.name, id: r.id })));
+      const keycloakRoles = rolesResponse.data.filter((role) => {
+        const isExcluded = excludedRoles.includes(role.name);
+        if (isExcluded) {
+          strapi.log.debug(`🚫 [getRoles] Excluding role: ${role.name}`);
+        }
+        return !isExcluded;
+      });
       strapi.log.debug("🔍 Filtered roles count:", keycloakRoles.length);
       const strapiRoles = await strapi.entityService.findMany("admin::role", {});
       strapi.log.info("✅ Successfully fetched Keycloak and Strapi roles");
@@ -970,7 +982,15 @@ const adminUserService = ({ strapi: strapi2 }) => ({
         strapi2.log.debug("🔍 Keycloak roles received:", keycloakRoles);
         strapi2.log.debug("🔍 Role configurations:", roleConfigs);
         const excludedRoles = roleConfigs.excludedRoles || [];
-        const filteredRoles = keycloakRoles.filter((role) => !excludedRoles.includes(role));
+        strapi2.log.debug("🔍 Excluded roles configuration:", excludedRoles);
+        strapi2.log.debug("🔍 Raw Keycloak roles before filtering:", keycloakRoles);
+        const filteredRoles = keycloakRoles.filter((role) => {
+          const isExcluded = excludedRoles.includes(role);
+          if (isExcluded) {
+            strapi2.log.debug(`🚫 Excluding role: ${role}`);
+          }
+          return !isExcluded;
+        });
         strapi2.log.debug("🔍 Filtered roles (excluded removed):", filteredRoles);
         filteredRoles.forEach((keycloakRole) => {
           for (const [configKey, roleMapping2] of Object.entries(roleConfigs)) {
