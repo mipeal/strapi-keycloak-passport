@@ -614,8 +614,6 @@ const config$1 = {
       "default-roles-ncr",
       "offline_access"
     ];
-    console.log("🔍 [CONFIG] Excluded roles from env:", excludedRolesRaw);
-    console.log("🔍 [CONFIG] Parsed excluded roles:", excludedRoles);
     return {
       KEYCLOAK_AUTH_URL: "",
       KEYCLOAK_REALM: "",
@@ -720,18 +718,8 @@ const authController = {
         rolesApiUrl,
         { headers: { Authorization: `Bearer ${accessToken}` } }
       );
-      strapi.log.debug("🔍 Fetched roles count:", rolesResponse.data.length);
       const excludedRoles = config2.roleConfigs?.excludedRoles || [];
-      strapi.log.debug("🔍 [getRoles] Excluded roles configuration:", excludedRoles);
-      strapi.log.debug("🔍 [getRoles] Raw role objects from Keycloak:", rolesResponse.data.map((r) => ({ name: r.name, id: r.id })));
-      const keycloakRoles = rolesResponse.data.filter((role) => {
-        const isExcluded = excludedRoles.includes(role.name);
-        if (isExcluded) {
-          strapi.log.debug(`🚫 [getRoles] Excluding role: ${role.name}`);
-        }
-        return !isExcluded;
-      });
-      strapi.log.debug("🔍 Filtered roles count:", keycloakRoles.length);
+      const keycloakRoles = rolesResponse.data.filter((role) => !excludedRoles.includes(role.name));
       const strapiRoles = await strapi.entityService.findMany("admin::role", {});
       strapi.log.info("✅ Successfully fetched Keycloak and Strapi roles");
       return ctx.send({ keycloakRoles, strapiRoles });
@@ -979,45 +967,22 @@ const adminUserService = ({ strapi: strapi2 }) => ({
       try {
         strapi2.log.debug("🔍 Fetching Keycloak roles for user:", keycloakUserId);
         const keycloakRoles = await fetchKeycloakUserRoles(keycloakUserId, strapi2);
-        strapi2.log.debug("🔍 Keycloak roles received:", keycloakRoles);
-        strapi2.log.debug("🔍 Role configurations:", roleConfigs);
         const excludedRoles = roleConfigs.excludedRoles || [];
-        strapi2.log.debug("🔍 Excluded roles configuration:", excludedRoles);
-        strapi2.log.debug("🔍 Raw Keycloak roles before filtering:", keycloakRoles);
-        const filteredRoles = keycloakRoles.filter((role) => {
-          const isExcluded = excludedRoles.includes(role);
-          if (isExcluded) {
-            strapi2.log.debug(`🚫 Excluding role: ${role}`);
-          }
-          return !isExcluded;
-        });
-        strapi2.log.debug("🔍 Filtered roles (excluded removed):", filteredRoles);
+        const filteredRoles = keycloakRoles.filter((role) => !excludedRoles.includes(role));
         filteredRoles.forEach((keycloakRole) => {
           for (const [configKey, roleMapping2] of Object.entries(roleConfigs)) {
             if (configKey === "defaultRoleId" || configKey === "excludedRoles") continue;
             if (roleMapping2.keycloakRole === keycloakRole) {
               appliedRoles.add(roleMapping2.roleId);
-              strapi2.log.debug(`🔍 Mapped ${keycloakRole} -> Strapi role ${roleMapping2.roleId} (${configKey})`);
               break;
             }
           }
         });
-        if (appliedRoles.size === 0) {
-          strapi2.log.debug("🔍 No matching role mappings found, will use default role");
-        }
       } catch (error) {
         strapi2.log.error("❌ Failed to fetch user roles from Keycloak:", error.response?.data || error.message);
       }
       const userRoles = appliedRoles.size ? Array.from(appliedRoles) : [DEFAULT_ROLE_ID];
-      strapi2.log.debug("🔍 Final user roles:", { roles: userRoles, usingDefault: appliedRoles.size === 0 });
       if (!adminUser) {
-        strapi2.log.debug("🔍 Creating new admin user with data:", {
-          email,
-          firstname,
-          lastname,
-          username,
-          roles: userRoles
-        });
         adminUser = await strapi2.entityService.create("admin::user", {
           data: {
             email,

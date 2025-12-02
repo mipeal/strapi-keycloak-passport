@@ -5,26 +5,21 @@
  * @description UI for mapping Keycloak roles to Strapi roles in Strapi Admin panel.
  */
 
-import React, { useReducer, useEffect, useState } from 'react';
+import React, { useReducer, useEffect } from 'react';
 import axios from 'axios';
 import {
   Box,
-  Flex,
   Typography,
-  Button,
   Table,
   Thead,
   Tbody,
   Tr,
   Th,
   Td,
-  SingleSelect,
-  SingleSelectOption,
   Loader,
   Alert,
-  useNotifyAT,
 } from '@strapi/design-system';
-import { Check, Collapse } from '@strapi/icons';
+import { Collapse } from '@strapi/icons';
 
 /**
  * @typedef {Object} HomePageState
@@ -60,17 +55,8 @@ const reducer = (state, action) => {
   switch (action.type) {
     case 'SET_DATA':
       return { ...state, ...action.payload, loading: false };
-    case 'SET_ROLE_MAPPING':
-      return {
-        ...state,
-        roleMappings: { ...state.roleMappings, [action.keycloakRole]: action.strapiRole },
-      };
     case 'SET_ERROR':
       return { ...state, error: action.error, loading: false };
-    case 'SET_SUCCESS':
-      return { ...state, success: true };
-    case 'RESET_SUCCESS':
-      return { ...state, success: false };
     default:
       return state;
   }
@@ -84,8 +70,6 @@ const reducer = (state, action) => {
 const HomePage = () => {
   /** @type {HomePageState, React.Dispatch<{ type: string, payload?: any }>}} */
   const [state, dispatch] = useReducer(reducer, initialState);
-  const [isSaving, setIsSaving] = useState(false);
-  const notifyAT = useNotifyAT();
 
   useEffect(() => {
     /**
@@ -117,39 +101,6 @@ const HomePage = () => {
     fetchRoles();
   }, []);
 
-  /**
-   * Updates the role mapping state when a role is selected.
-   *
-   * @param {string} keycloakRole - The Keycloak role name.
-   * @param {number} strapiRole - The selected Strapi role ID.
-   */
-  const handleRoleMappingChange = (keycloakRole, strapiRole) => {
-    dispatch({ type: 'SET_ROLE_MAPPING', keycloakRole, strapiRole });
-  };
-
-  /**
-   * Saves the current role mappings to Strapi.
-   *
-   * @async
-   * @function saveMappings
-   */
-  const saveMappings = async () => {
-    setIsSaving(true);
-    try {
-      await axios.post('/strapi-keycloak-passport/save-keycloak-role-mappings', { mappings: state.roleMappings });
-      dispatch({ type: 'SET_SUCCESS' });
-
-      // Notify screen readers
-      // notifyAT('Role mappings saved successfully.');
-
-      setTimeout(() => dispatch({ type: 'RESET_SUCCESS' }), 3000);
-    } catch (error) {
-      dispatch({ type: 'SET_ERROR', error: 'Failed to save mappings. Try again.' });
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
   if (state.loading) return <Loader>Loading roles...</Loader>;
 
   return (
@@ -160,7 +111,7 @@ const HomePage = () => {
 
       <Box paddingTop={2} paddingBottom={4}>
         <Typography variant="epsilon" textColor="neutral600" paddingTop={2} paddingBottom={4}>
-          Map Keycloak roles to Strapi admin roles.
+          View Keycloak roles and their mapped Strapi admin roles. Role mappings are configured via environment variables.
         </Typography>
       </Box>
 
@@ -168,14 +119,6 @@ const HomePage = () => {
         <Box paddingBottom={4}>
           <Alert title="Error" variant="danger" startIcon={<Collapse />}>
             {state.error}
-          </Alert>
-        </Box>
-      )}
-
-      {state.success && (
-        <Box paddingBottom={4}>
-          <Alert title="Success" variant="success" startIcon={<Check />}>
-            Role mappings saved successfully!
           </Alert>
         </Box>
       )}
@@ -195,38 +138,16 @@ const HomePage = () => {
                   <Typography textColor="neutral800">{kcRole.name}</Typography>
                 </Td>
                 <Td>
-                  <SingleSelect
-                    label="Select Strapi Role"
-                    placeholder="Assign role"
-                    value={String(state.roleMappings[kcRole.name] || '')}
-                    onChange={(roleId) => handleRoleMappingChange(kcRole.name, roleId)}
-                  >
-                    {state.strapiRoles.map((strapiRole) => (
-                      <SingleSelectOption
-                        key={strapiRole.id}
-                        value={String(strapiRole.id)}>
-                        {strapiRole.name}
-                      </SingleSelectOption>
-                    ))}
-                  </SingleSelect>
+                  <Typography textColor="neutral600">
+                    {state.roleMappings[kcRole.name] 
+                      ? state.strapiRoles.find(r => r.id === state.roleMappings[kcRole.name])?.name || '-'
+                      : '-'}
+                  </Typography>
                 </Td>
               </Tr>
             ))}
           </Tbody>
         </Table>
-
-        <Box padding={4} paddingRight={8}>
-          <Flex justifyContent="flex-end">
-            <Button
-              onClick={saveMappings}
-              variant="default"
-              loading={isSaving}
-              disabled={isSaving}
-            >
-              {isSaving ? 'Saving...' : 'Save Mappings'}
-            </Button>
-          </Flex>
-        </Box>
       </Box>
     </Box>
   );

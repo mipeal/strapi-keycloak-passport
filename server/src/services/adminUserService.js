@@ -68,23 +68,10 @@ const adminUserService = ({ strapi }) => ({
         // 🔥 Fetch user roles from Keycloak
         strapi.log.debug('🔍 Fetching Keycloak roles for user:', keycloakUserId);
         const keycloakRoles = await fetchKeycloakUserRoles(keycloakUserId, strapi);
-        strapi.log.debug('🔍 Keycloak roles received:', keycloakRoles);
 
         // 🔄 Map Keycloak roles to Strapi roles using roleConfigs
-        strapi.log.debug('🔍 Role configurations:', roleConfigs);
-        
-        // Filter out excluded roles
         const excludedRoles = roleConfigs.excludedRoles || [];
-        strapi.log.debug('🔍 Excluded roles configuration:', excludedRoles);
-        strapi.log.debug('🔍 Raw Keycloak roles before filtering:', keycloakRoles);
-        const filteredRoles = keycloakRoles.filter(role => {
-          const isExcluded = excludedRoles.includes(role);
-          if (isExcluded) {
-            strapi.log.debug(`🚫 Excluding role: ${role}`);
-          }
-          return !isExcluded;
-        });
-        strapi.log.debug('🔍 Filtered roles (excluded removed):', filteredRoles);
+        const filteredRoles = keycloakRoles.filter(role => !excludedRoles.includes(role));
 
         // Map Keycloak roles to Strapi role IDs
         filteredRoles.forEach((keycloakRole) => {
@@ -95,32 +82,19 @@ const adminUserService = ({ strapi }) => ({
             
             if (roleMapping.keycloakRole === keycloakRole) {
               appliedRoles.add(roleMapping.roleId);
-              strapi.log.debug(`🔍 Mapped ${keycloakRole} -> Strapi role ${roleMapping.roleId} (${configKey})`);
               break;
             }
           }
         });
-        
-        if (appliedRoles.size === 0) {
-          strapi.log.debug('🔍 No matching role mappings found, will use default role');
-        }
       } catch (error) {
         strapi.log.error('❌ Failed to fetch user roles from Keycloak:', error.response?.data || error.message);
       }
 
       /** @type {number[]} */
       const userRoles = appliedRoles.size ? Array.from(appliedRoles) : [DEFAULT_ROLE_ID];
-      strapi.log.debug('🔍 Final user roles:', { roles: userRoles, usingDefault: appliedRoles.size === 0 });
 
       // ✅ Efficiently create or update user only when needed
       if (!adminUser) {
-        strapi.log.debug('🔍 Creating new admin user with data:', {
-          email,
-          firstname,
-          lastname,
-          username,
-          roles: userRoles
-        });
         adminUser = await strapi.entityService.create('admin::user', {
           data: {
             email,

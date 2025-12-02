@@ -47,22 +47,9 @@ export default {
         { headers: { Authorization: `Bearer ${accessToken}` } }
       );
 
-      strapi.log.debug('🔍 Fetched roles count:', rolesResponse.data.length);
-
       /** @type {Object[]} */
       const excludedRoles = config.roleConfigs?.excludedRoles || [];
-      strapi.log.debug('🔍 [getRoles] Excluded roles configuration:', excludedRoles);
-      strapi.log.debug('🔍 [getRoles] Raw role objects from Keycloak:', rolesResponse.data.map(r => ({ name: r.name, id: r.id })));
-      
-      const keycloakRoles = rolesResponse.data.filter(role => {
-        const isExcluded = excludedRoles.includes(role.name);
-        if (isExcluded) {
-          strapi.log.debug(`🚫 [getRoles] Excluding role: ${role.name}`);
-        }
-        return !isExcluded;
-      });
-
-      strapi.log.debug('🔍 Filtered roles count:', keycloakRoles.length);
+      const keycloakRoles = rolesResponse.data.filter(role => !excludedRoles.includes(role.name));
 
       /** @type {Object[]} */
       const strapiRoles = await strapi.entityService.findMany('admin::role', {});

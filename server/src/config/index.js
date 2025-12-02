@@ -1,6 +1,5 @@
 export default {
   default: ({ env }) => {
-    // Parse excluded roles with detailed logging
     const excludedRolesRaw = env('KEYCLOAK_PASSPORT_EXCLUDED_ROLES');
     const excludedRoles = excludedRolesRaw 
       ? excludedRolesRaw.split(',').map(r => r.trim())
@@ -9,9 +8,6 @@ export default {
           'default-roles-ncr',
           'offline_access',
         ];
-
-    console.log('🔍 [CONFIG] Excluded roles from env:', excludedRolesRaw);
-    console.log('🔍 [CONFIG] Parsed excluded roles:', excludedRoles);
 
     return {
       KEYCLOAK_AUTH_URL: '',
