@@ -20,26 +20,47 @@ export default {
     try {
       const config = strapi.config.get('plugin::strapi-keycloak-passport');
 
+      strapi.log.debug('🔍 Fetching Keycloak roles...');
+
       // 🔑 Get Admin Token
       const accessToken = await strapi
         .plugin('strapi-keycloak-passport')
         .service('keycloakService')
         .fetchAdminToken();
 
+      // 🔍 Construct roles API URL - support both full URLs and path-based config
+      let rolesApiUrl;
+      if (config.KEYCLOAK_AUTH_URL.includes('/realms/')) {
+        // Full URL format: extract base URL
+        const baseUrl = config.KEYCLOAK_AUTH_URL.split('/realms/')[0];
+        rolesApiUrl = `${baseUrl}/admin/realms/${config.KEYCLOAK_REALM}/roles`;
+      } else {
+        // Base URL format
+        rolesApiUrl = `${config.KEYCLOAK_AUTH_URL}/admin/realms/${config.KEYCLOAK_REALM}/roles`;
+      }
+
+      strapi.log.debug('🔍 Roles API URL:', rolesApiUrl);
+
       // 🔍 Fetch Keycloak Roles using Admin Token
       const rolesResponse = await axios.get(
-        `${config.KEYCLOAK_AUTH_URL}/auth/admin/realms/${config.KEYCLOAK_REALM}/roles`,
+        rolesApiUrl,
         { headers: { Authorization: `Bearer ${accessToken}` } }
       );
 
+      strapi.log.debug('🔍 Fetched roles count:', rolesResponse.data.length);
+
       /** @type {Object[]} */
+      const excludedRoles = config.roleConfigs?.excludedRoles || [];
       const keycloakRoles = rolesResponse.data.filter(
-        role => !config.roleConfigs.excludedRoles.includes(role.name)
+        role => !excludedRoles.includes(role.name)
       );
+
+      strapi.log.debug('🔍 Filtered roles count:', keycloakRoles.length);
 
       /** @type {Object[]} */
       const strapiRoles = await strapi.entityService.findMany('admin::role', {});
 
+      strapi.log.info('✅ Successfully fetched Keycloak and Strapi roles');
       return ctx.send({ keycloakRoles, strapiRoles });
     } catch (error) {
       strapi.log.error(
@@ -61,16 +82,27 @@ export default {
    */
   async getRoleMappings(ctx) {
     try {
-      const mappings = await strapi
-        .service('plugin::strapi-keycloak-passport.roleMappingService')
-        .getMappings();
+      const config = strapi.config.get('plugin::strapi-keycloak-passport');
+      const roleConfigs = config.roleConfigs;
 
-      // Convert array of mappings into an object
+      strapi.log.debug('🔍 Fetching role mappings from config...');
+
+      // Convert config-based role mappings to object format
       /** @type {Object} */
-      const formattedMappings = mappings.reduce((acc, mapping) => {
-        acc[mapping.keycloakRole] = mapping.strapiRole;
-        return acc;
-      }, {});
+      const formattedMappings = {};
+
+      // Iterate through roleConfigs and extract mappings
+      for (const [key, value] of Object.entries(roleConfigs)) {
+        // Skip non-mapping config entries
+        if (key === 'defaultRoleId' || key === 'excludedRoles') continue;
+        
+        if (value.keycloakRole && value.roleId) {
+          formattedMappings[value.keycloakRole] = value.roleId;
+        }
+      }
+
+      strapi.log.debug('🔍 Role mappings:', formattedMappings);
+      strapi.log.info('✅ Successfully retrieved role mappings');
 
       return ctx.send(formattedMappings);
     } catch (error) {
@@ -93,14 +125,14 @@ export default {
    */
   async saveRoleMappings(ctx) {
     try {
-      /** @type {Object<string, number>} */
-      const { mappings } = ctx.request.body;
+      strapi.log.warn('⚠️ Role mappings are now config-based and cannot be saved via API');
+      strapi.log.info('ℹ️ Please update role mappings in config/plugins.js');
 
-      await strapi.plugin('strapi-keycloak-passport')
-        .service('roleMappingService')
-        .saveMappings(mappings);
-
-      return ctx.send({ message: 'Mappings saved successfully.' });
+      return ctx.send({ 
+        message: 'Role mappings are config-based. Please update config/plugins.js to modify role mappings.',
+        success: false,
+        configBased: true,
+      });
     } catch (error) {
       strapi.log.error('❌ Failed to save role mappings:', error.response?.data || error.message);
       return ctx.badRequest('Failed to save role mappings');

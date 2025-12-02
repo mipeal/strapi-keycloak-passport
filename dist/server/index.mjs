@@ -700,15 +700,28 @@ const authController = {
   async getRoles(ctx) {
     try {
       const config2 = strapi.config.get("plugin::strapi-keycloak-passport");
+      strapi.log.debug("🔍 Fetching Keycloak roles...");
       const accessToken = await strapi.plugin("strapi-keycloak-passport").service("keycloakService").fetchAdminToken();
+      let rolesApiUrl;
+      if (config2.KEYCLOAK_AUTH_URL.includes("/realms/")) {
+        const baseUrl = config2.KEYCLOAK_AUTH_URL.split("/realms/")[0];
+        rolesApiUrl = `${baseUrl}/admin/realms/${config2.KEYCLOAK_REALM}/roles`;
+      } else {
+        rolesApiUrl = `${config2.KEYCLOAK_AUTH_URL}/admin/realms/${config2.KEYCLOAK_REALM}/roles`;
+      }
+      strapi.log.debug("🔍 Roles API URL:", rolesApiUrl);
       const rolesResponse = await axios.get(
-        `${config2.KEYCLOAK_AUTH_URL}/auth/admin/realms/${config2.KEYCLOAK_REALM}/roles`,
+        rolesApiUrl,
         { headers: { Authorization: `Bearer ${accessToken}` } }
       );
+      strapi.log.debug("🔍 Fetched roles count:", rolesResponse.data.length);
+      const excludedRoles = config2.roleConfigs?.excludedRoles || [];
       const keycloakRoles = rolesResponse.data.filter(
-        (role) => !config2.roleConfigs.excludedRoles.includes(role.name)
+        (role) => !excludedRoles.includes(role.name)
       );
+      strapi.log.debug("🔍 Filtered roles count:", keycloakRoles.length);
       const strapiRoles = await strapi.entityService.findMany("admin::role", {});
+      strapi.log.info("✅ Successfully fetched Keycloak and Strapi roles");
       return ctx.send({ keycloakRoles, strapiRoles });
     } catch (error) {
       strapi.log.error(
@@ -729,11 +742,18 @@ const authController = {
    */
   async getRoleMappings(ctx) {
     try {
-      const mappings = await strapi.service("plugin::strapi-keycloak-passport.roleMappingService").getMappings();
-      const formattedMappings = mappings.reduce((acc, mapping) => {
-        acc[mapping.keycloakRole] = mapping.strapiRole;
-        return acc;
-      }, {});
+      const config2 = strapi.config.get("plugin::strapi-keycloak-passport");
+      const roleConfigs = config2.roleConfigs;
+      strapi.log.debug("🔍 Fetching role mappings from config...");
+      const formattedMappings = {};
+      for (const [key, value] of Object.entries(roleConfigs)) {
+        if (key === "defaultRoleId" || key === "excludedRoles") continue;
+        if (value.keycloakRole && value.roleId) {
+          formattedMappings[value.keycloakRole] = value.roleId;
+        }
+      }
+      strapi.log.debug("🔍 Role mappings:", formattedMappings);
+      strapi.log.info("✅ Successfully retrieved role mappings");
       return ctx.send(formattedMappings);
     } catch (error) {
       strapi.log.error("❌ Failed to retrieve role mappings:", error.response?.data || error.message);
@@ -754,9 +774,13 @@ const authController = {
    */
   async saveRoleMappings(ctx) {
     try {
-      const { mappings } = ctx.request.body;
-      await strapi.plugin("strapi-keycloak-passport").service("roleMappingService").saveMappings(mappings);
-      return ctx.send({ message: "Mappings saved successfully." });
+      strapi.log.warn("⚠️ Role mappings are now config-based and cannot be saved via API");
+      strapi.log.info("ℹ️ Please update role mappings in config/plugins.js");
+      return ctx.send({
+        message: "Role mappings are config-based. Please update config/plugins.js to modify role mappings.",
+        success: false,
+        configBased: true
+      });
     } catch (error) {
       strapi.log.error("❌ Failed to save role mappings:", error.response?.data || error.message);
       return ctx.badRequest("Failed to save role mappings");
