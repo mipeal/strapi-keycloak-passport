@@ -1,9 +1,9 @@
 {
-  "name": "strapi-keycloak-passport",
-  "version": "0.1.5",
+  "name": "strapi-keycloak-passport-oidc",
+  "version": "0.0.1",
   "description": "Keycloak authentication provider for the Strapi v5 administration panel.",
   "license": "MIT",
-  "author": "mipeal <mohamed.johnson@orange-sonatel.com>",
+  "author": "mipeal <codewarhead@gmail.com>",
   "keywords": [
     "strapi",
     "plugin",
@@ -79,7 +79,7 @@
   "homepage": "https://github.com/mipeal/strapi-keycloak-passport#readme",
   "strapi": {
     "kind": "plugin",
-    "name": "strapi-keycloak-passport",
+    "name": "strapi-keycloak-passport-oidc",
     "displayName": "Keycloak Passport",
     "description": "Keycloak authentication provider for administration panel"
   },
